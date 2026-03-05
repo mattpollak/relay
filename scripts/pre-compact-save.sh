@@ -39,6 +39,16 @@ The state file must be under 80 lines and include:
 - Next steps
 - Any blockers or important context that would be lost
 
+Then write a session hint file for efficient summarization:
+bash "\${CLAUDE_PLUGIN_ROOT}/scripts/write-data-file.sh" "session-hints/\$(date -u +%Y-%m-%dT%H%M%SZ)-\${CLAUDE_SESSION_ID}.json" << 'HINTEOF'
+{
+  "session_id": "\${CLAUDE_SESSION_ID}",
+  "workstream": "${ACTIVE_NAME}",
+  "summary": ["<3-6 bullets: what was accomplished in this session segment>"],
+  "decisions": ["<key decisions, if any — omit field if none>"]
+}
+HINTEOF
+
 Then update the registry and reset the context monitor:
 bash "\${CLAUDE_PLUGIN_ROOT}/scripts/update-registry.sh" "${ACTIVE_NAME}"
 bash "\${CLAUDE_PLUGIN_ROOT}/scripts/reset-counter.sh"
