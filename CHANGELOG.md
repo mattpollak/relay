@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.0] - 2026-03-05
+
+### Added
+- **`/relay:idea` skill** — Capture ideas for future work (`/relay:idea <text>`), displayed as a separate section in `/relay:list`. Promote an idea to a full workstream with `/relay:idea promote <id>`. Ideas stored in `ideas.json`.
+- **`/relay:summarize` skill** — Summarize recent activity grouped by workstream. Supports natural-language time ranges (`48h`, `7d`, `since Monday`, ISO dates). Useful for standup prep, brag books, and catching up after time away.
+- **Cross-project indexing docs** — README now clarifies that the search index covers all projects globally, with `project` parameter for narrowing results.
+
+### Changed
+- **`/relay:list`** — Now displays ideas as a separate section between workstreams and parking lot.
+- **`/relay:new`** — Auto-detects matching ideas and offers to remove them when creating a workstream.
+
+## [0.6.0] - 2026-03-01
+
+### Added
+- **Session-level addressing** — Three tool enhancements for navigating multi-session conversations:
+  - `get_conversation` accepts `session` parameter to filter to specific sessions (e.g. `"4"`, `"2-3"`, `"1,4"`)
+  - `list_sessions` accepts `slug` parameter, returns session index with `session_number` fields
+  - `search_history` results include `session_number` showing position in slug chain
+
 ## [0.5.0] - 2026-02-28
 
 ### Changed

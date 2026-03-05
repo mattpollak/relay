@@ -41,4 +41,15 @@ Create a new workstream with the name and description provided in `$ARGUMENTS`.
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/new-registry.sh" "<name>" "<description>" "$(pwd)"
    ```
 
-8. **Confirm.** Tell the user the workstream was created and is now active. Show the path to the state file.
+8. **Check for matching ideas.** Read the ideas file:
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/read-data-file.sh" "ideas.json"
+   ```
+   If any idea's text is a close match to the new workstream's name or description, ask the user if they'd like to remove it from the ideas list. If yes, remove it and write the updated array:
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/write-data-file.sh" "ideas.json" << 'EOF'
+   <updated JSON array without the matched idea>
+   EOF
+   ```
+
+9. **Confirm.** Tell the user the workstream was created and is now active. Show the path to the state file.

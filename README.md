@@ -86,6 +86,9 @@ claude --plugin-dir /path/to/relay
 | `/relay:save` | Save current workstream state to disk |
 | `/relay:switch database-refactor` | Save current, load a different workstream |
 | `/relay:park` | Save and deactivate the current workstream |
+| `/relay:idea use websockets for real-time` | Capture an idea for future work (shown in `/relay:list`) |
+| `/relay:idea promote 2` | Promote an idea to a full workstream |
+| `/relay:summarize 48h` | Summarize recent activity grouped by workstream (standup prep, brag books) |
 
 ### Natural language
 
@@ -96,6 +99,8 @@ The skills also respond to natural language:
 - "park this", "park workstream", "pause workstream"
 - "list workstreams", "show workstreams"
 - "relay status", "workstream status", "what am I working on"
+- "add idea", "jot down", "remember this idea"
+- "summarize activity", "what did I work on", "standup summary", "brag book"
 
 ### Conversation search
 
@@ -142,7 +147,7 @@ Data is stored at `${XDG_CONFIG_HOME:-$HOME/.config}/relay/`:
 ```
 ~/.config/relay/
 ├── workstreams.json              # Central registry
-├── parking-lot.md                # Cross-project ideas
+├── ideas.json                    # Pre-workstream ideas (shown in /relay:list)
 ├── session-markers/              # Links session IDs to workstreams (auto)
 │   └── <session-id>.json
 └── workstreams/
@@ -181,6 +186,8 @@ Saves use an atomic three-step process: write new content to a temp file (`state
 ### MCP server
 
 On startup, the server scans `~/.claude/projects/` for JSONL transcript files and incrementally indexes them into SQLite FTS5. First run takes 3-5 seconds; subsequent runs process only new/modified files (~0.01s). Auto-tagging runs during indexing — keyword heuristics classify messages by content type (reviews, plans, decisions, etc.) and sessions by activity (testing, deployment, browser usage).
+
+**Cross-project indexing** — The search index covers every Claude Code conversation across all your projects, not just the current one. Search for that auth pattern you figured out in project A while working in project B. Use the `project` parameter on `search_history` or `list_sessions` to narrow results to a specific project.
 
 ## Complementary Systems
 
