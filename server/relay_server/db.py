@@ -64,6 +64,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content=messages,
     content_rowid=id
 );
+
+CREATE TABLE IF NOT EXISTS session_hints (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    source_file TEXT NOT NULL UNIQUE,
+    workstream TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    decisions TEXT,
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_hints_session ON session_hints(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_hints_workstream ON session_hints(workstream);
 """
 
 # Triggers must be created separately — they fail inside executescript

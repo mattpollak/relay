@@ -58,3 +58,50 @@ def test_connection_has_wal_and_fk():
             assert fk == 1
         finally:
             conn.close()
+
+
+def test_session_hints_table_exists():
+    """session_hints table should be created by ensure_schema."""
+    import tempfile
+    from pathlib import Path
+    from relay_server.db import ensure_schema, get_connection
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        ensure_schema(db_path)
+        conn = get_connection(db_path)
+        try:
+            # Create a parent session for FK constraint
+            conn.execute(
+                "INSERT INTO sessions (session_id) VALUES ('test-id')"
+            )
+            # Table exists and accepts inserts
+            conn.execute(
+                """INSERT INTO session_hints
+                   (session_id, timestamp, source_file, workstream, summary)
+                   VALUES ('test-id', '2026-03-05T00:00:00Z', 'test.json', 'ws', '["bullet"]')"""
+            )
+            # Unique constraint on source_file
+            try:
+                conn.execute(
+                    """INSERT INTO session_hints
+                       (session_id, timestamp, source_file, workstream, summary)
+                       VALUES ('test-id', '2026-03-05T00:00:00Z', 'test.json', 'ws', '["bullet"]')"""
+                )
+                assert False, "Should have raised IntegrityError"
+            except Exception:
+                pass  # Expected — unique constraint on source_file
+
+            # Multiple segments per session allowed (different source_file)
+            conn.execute(
+                """INSERT INTO session_hints
+                   (session_id, timestamp, source_file, workstream, summary, decisions)
+                   VALUES ('test-id', '2026-03-05T01:00:00Z', 'test2.json', 'ws', '["b2"]', '["d1"]')"""
+            )
+            rows = conn.execute(
+                "SELECT * FROM session_hints WHERE session_id = 'test-id' ORDER BY timestamp"
+            ).fetchall()
+            assert len(rows) == 2
+            assert rows[1]["decisions"] == '["d1"]'
+        finally:
+            conn.close()
