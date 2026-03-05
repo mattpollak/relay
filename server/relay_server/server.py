@@ -1,5 +1,6 @@
 """FastMCP server with conversation history search tools."""
 
+import json
 import logging
 import sqlite3
 from collections.abc import AsyncIterator
@@ -550,6 +551,71 @@ def list_tags(
                 results[tag]["total"] += r["cnt"]
 
         return sorted(results.values(), key=lambda x: x["total"], reverse=True)
+    finally:
+        conn.close()
+
+
+def _get_session_summaries_from_db(
+    conn: sqlite3.Connection,
+    session_ids: list[str],
+) -> list[dict]:
+    """Query session hints from DB. Extracted for testability."""
+    if not session_ids:
+        return []
+
+    placeholders = ",".join("?" * len(session_ids))
+    rows = conn.execute(
+        f"""SELECT session_id, timestamp, workstream, summary, decisions
+            FROM session_hints
+            WHERE session_id IN ({placeholders})
+            ORDER BY session_id, timestamp ASC""",
+        session_ids,
+    ).fetchall()
+
+    # Group by session_id
+    hints_by_session: dict[str, list[dict]] = {}
+    for row in rows:
+        sid = row["session_id"]
+        if sid not in hints_by_session:
+            hints_by_session[sid] = []
+        segment = {
+            "workstream": row["workstream"],
+            "timestamp": row["timestamp"],
+            "summary": json.loads(row["summary"]),
+        }
+        if row["decisions"]:
+            segment["decisions"] = json.loads(row["decisions"])
+        hints_by_session[sid].append(segment)
+
+    # Build results for all requested session_ids
+    results = []
+    for sid in session_ids:
+        segments = hints_by_session.get(sid, [])
+        results.append({
+            "session_id": sid,
+            "hints_available": len(segments) > 0,
+            "segments": segments,
+        })
+    return results
+
+
+@mcp.tool()
+def get_session_summaries(
+    session_ids: list[str],
+    ctx: Context[ServerSession, AppContext],
+) -> list[dict]:
+    """Get pre-written session summaries for efficient summarization.
+
+    Returns all hint segments for the given sessions, ordered by timestamp.
+    Sessions without hints return an entry with hints_available: false.
+
+    Args:
+        session_ids: List of session UUIDs to fetch summaries for
+    """
+    db_path = _get_db_path(ctx)
+    conn = get_connection(db_path)
+    try:
+        return _get_session_summaries_from_db(conn, session_ids)
     finally:
         conn.close()
 
