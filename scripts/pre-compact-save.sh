@@ -39,10 +39,11 @@ The state file must be under 80 lines and include:
 - Next steps
 - Any blockers or important context that would be lost
 
-Then write a session hint file for efficient summarization:
-bash "\${CLAUDE_PLUGIN_ROOT}/scripts/write-data-file.sh" "session-hints/\$(date -u +%Y-%m-%dT%H%M%SZ)-\${CLAUDE_SESSION_ID}.json" << 'HINTEOF'
+Then write a session hint file for efficient summarization.
+Use the session ID from the relay-session-id: line in your session context.
+bash "\${CLAUDE_PLUGIN_ROOT}/scripts/write-data-file.sh" "session-hints/\$(date -u +%Y-%m-%dT%H%M%SZ)-<session_id>.json" << 'HINTEOF'
 {
-  "session_id": "\${CLAUDE_SESSION_ID}",
+  "session_id": "<session_id>",
   "workstream": "${ACTIVE_NAME}",
   "summary": ["<3-6 bullets: what was accomplished in this session segment>"],
   "decisions": ["<key decisions, if any — omit field if none>"]

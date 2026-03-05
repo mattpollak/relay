@@ -31,7 +31,7 @@ Switch from the current active workstream to the one named `$ARGUMENTS`.
       bash "${CLAUDE_PLUGIN_ROOT}/scripts/complete-save.sh" "<active-name>"
       ```
 
-4. **Write session hint.** Write a session hint file for the workstream being switched away from (same format and guidelines as in `/relay:save` Step 5). Use `date -u +%Y-%m-%dT%H%M%SZ` for the timestamp and `CLAUDE_SESSION_ID` for the session ID.
+4. **Write session hint.** Write a session hint file for the workstream being switched away from (same format and guidelines as in `/relay:save` Step 5). Use `date -u +%Y-%m-%dT%H%M%SZ` for the timestamp and the session ID from the `relay-session-id:` line in your session context.
 
 5. **Activate target workstream.** Park the old and activate the new in the registry:
    ```bash

@@ -77,6 +77,11 @@ else
   fi
 fi
 
+# Append session ID so skills can reference it for hint files
+if [ -n "$SESSION_ID" ]; then
+  CONTEXT=$(printf "%s\nrelay-session-id: %s" "$CONTEXT" "$SESSION_ID")
+fi
+
 # Write session marker for indexer (links session_id to active workstream)
 if [ -n "$SESSION_ID" ] && [ -n "$ACTIVE_NAME" ]; then
   MARKER_DIR="$DATA_DIR/session-markers"

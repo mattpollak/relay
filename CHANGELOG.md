@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.1] - 2026-03-05
+
+### Fixed
+- **Session ID availability** — `session-start.sh` now outputs the session ID as `relay-session-id:` in context, so skills can reliably reference it for hint file naming. Previously referenced a nonexistent `CLAUDE_SESSION_ID` environment variable.
+- **Hint UUID validation** — Indexer now rejects hint files with truncated session IDs (must be full 36-char UUIDs). Prevents silent data loss from malformed backfill output.
+
+### Changed
+- **Skills** — Save, park, switch, and pre-compact instructions updated to read session ID from context instead of env var.
+
 ## [0.8.0] - 2026-03-05
 
 ### Added

@@ -8,7 +8,7 @@
       "name": "relay",
       "source": "./",
       "description": "Workstream management, context persistence, and session history search for Claude Code",
-      "version": "0.8.0"
+      "version": "0.8.1"
     }
   ]
 }

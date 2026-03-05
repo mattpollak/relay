@@ -57,7 +57,7 @@ Save the current session's context to the active workstream's state file.
 
    Generate a UTC timestamp for the filename: `date -u +%Y-%m-%dT%H%M%SZ` (e.g. `2026-03-05T163000Z`).
 
-   Get the current session ID from the `CLAUDE_SESSION_ID` environment variable. If not available, skip this step silently.
+   Get the current session ID from the `relay-session-id:` line in your session context (set at session start). If not available, skip this step silently.
 
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/write-data-file.sh" "session-hints/<timestamp>-<session_id>.json" << 'EOF'
