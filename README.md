@@ -6,18 +6,101 @@
 
 <p align="center">Pass context between Claude Code sessions like a baton.</p>
 
-**The problem:** Claude Code sessions are isolated. Each one starts from scratch — you re-explain your architecture, repeat decisions, and re-orient Claude on where you left off. Juggling multiple projects means the handoff happens in your head. And everything Claude helped you figure out? Lost in transcript files nobody can search.
+## The Problem
 
-**relay is the handoff.** It passes your working context from one session to the next — automatically loaded at startup, with prompts to save before compaction, and searchable across every conversation you've ever had. Switch between projects without dropping context.
+Claude Code sessions are isolated. Every time you start a new one:
 
-## What You Get
+- **You re-explain everything.** "We're building an auth system. We chose JWT over sessions because..." — for the third time this week.
+- **You lose decisions.** Yesterday Claude helped you evaluate three caching strategies. You picked one. Today, neither of you remembers why.
+- **Project switching is manual.** You're deep in a backend refactor, need to fix a quick frontend bug, and now you're copy-pasting context between windows.
+- **Your history is gone.** Two weeks ago Claude wrote a brilliant database migration pattern. It's buried in a JSONL transcript file somewhere. Good luck finding it.
 
-- **Auto-loaded context** — Every session starts with your active workstream's state already in context. No re-explaining, no "let me catch you up."
-- **Multi-instance support** — Run multiple Claude instances in parallel, each attached to a different active workstream. No conflicts, no fighting over the "active" slot.
-- **One-command switching** — `/relay:switch auth-migration` saves your current context, loads the new project's state, and you're coding in seconds. Both workstreams stay active.
-- **Context protection** — Warnings at ~80 and ~100 tool calls so you can save before compaction hits. PreCompact hook prompts a save before context is compressed.
-- **Full conversation search** — MCP server indexes every Claude Code transcript into searchable SQLite FTS5. Find that architecture decision from two weeks ago.
-- **Auto-tagging** — Messages tagged by content type (UX reviews, plans, decisions, investigations) so high-value content surfaces without remembering exact phrases.
+## What relay Does
+
+relay gives Claude Code persistent state that survives across sessions, a way to switch between projects without losing your place, and full-text search across every conversation you've ever had.
+
+**Your workstream loads automatically.** When you start a session, relay injects your active workstream's state — what you were working on, decisions made, next steps. Claude picks up where you left off without being told.
+
+**Project switching takes one command.** `/relay:switch database-refactor` saves your current workstream, loads the other project's state, and you're working in seconds. Both workstreams stay active — run them in parallel across multiple Claude instances if you want.
+
+**Nothing gets lost.** Every conversation is indexed and searchable. Find that auth pattern from last week, that deployment fix from two weeks ago, or every UX review you've ever done — across all your projects.
+
+## See It in Action
+
+**Starting a session** — your workstream state is already loaded:
+```
+relay: Active workstream 'api-refactor'
+---
+# api-refactor — REST API Modernization
+
+## Current Status
+Completed endpoint migration for /users and /teams. 47 tests passing.
+
+## Key Decisions
+- Using Express middleware for auth (not per-route)
+- Pagination via cursor, not offset
+
+## Next Steps
+1. Migrate /projects endpoints
+2. Add rate limiting middleware
+---
+```
+
+**Switching projects mid-session:**
+```
+> /relay:switch frontend-redesign
+
+Saved api-refactor state. Switched to frontend-redesign.
+
+# frontend-redesign — Dashboard Overhaul
+## Current Status
+Navigation component complete. Working on data tables...
+```
+
+**Finding something from weeks ago:**
+```
+> "How did we handle the database connection pooling issue?"
+
+[Claude searches your history and finds the exact session]
+```
+
+**Saving before you go:**
+```
+> /relay:save
+
+Saved workstream state, backup created, session hint written.
+```
+
+## Concepts
+
+relay introduces one new concept — **workstreams** — and builds on two that Claude Code already has:
+
+| Concept | What it is | Lifespan |
+|---|---|---|
+| **Session** | A single Claude Code conversation (start to exit). Has a UUID and a slug. When you "continue" a conversation, that's a new session in the same slug chain. | One conversation |
+| **Context window** | Everything Claude can currently see — system prompt, conversation history, tool results, injected state. Gets compressed (compacted) when it fills up. Gone when the session ends. | During a session |
+| **Workstream** | A named project or task with a persistent state file (`state.md`). relay loads it into the context window at session start, and saves it back to disk when you're done. This is what survives across sessions. | Until you complete or delete it |
+
+The relationship:
+
+```
+workstream (persistent — lives on disk)
+  └── loaded into context window (ephemeral — lives during a session)
+       └── inside a session (one conversation, has a UUID)
+```
+
+relay bridges the gap between the ephemeral context window and persistent workstream state. When a session ends or context gets compacted, your workstream state has already been saved to disk. The next session loads it back in automatically.
+
+## Key Features
+
+- **Auto-loaded workstream** — every session starts with your workstream state already in the context window
+- **One-command switching** — save current workstream, load another, keep both active
+- **Multi-instance support** — run parallel Claude instances on different workstreams without conflicts
+- **Compaction protection** — warnings as the context window fills up, with a prompt to save before compression
+- **Full conversation search** — every transcript indexed into searchable SQLite FTS5 across all projects
+- **Auto-tagging** — messages classified by type (UX reviews, architecture decisions, plans, debugging) for easy filtering
+- **Activity summaries** — `/relay:summarize 7d` for standup prep, brag books, or catching up after time away
+- **Idea capture** — `/relay:idea` to jot down future work without losing your flow
 
 ## Prerequisites
 
@@ -95,7 +178,7 @@ claude --plugin-dir /path/to/relay
 The skills also respond to natural language:
 - "new workstream", "start workstream", "create workstream"
 - "switch to X", "resume workstream", "work on X"
-- "save context", "save state", "save session"
+- "save state", "save workstream", "save session"
 - "park this", "park workstream", "pause workstream"
 - "list workstreams", "show workstreams"
 - "relay status", "workstream status", "what am I working on"
@@ -185,9 +268,9 @@ The conversation search index lives at `~/.local/share/relay/index.db` (SQLite, 
 
 | Hook | Event | What it does |
 |---|---|---|
-| `session-start.sh` | SessionStart | Reads registry, injects workstream state into context. Auto-attaches if one active workstream; prompts for choice if multiple are active. Writes session marker. |
-| `context-monitor.sh` | PostToolUse | Counts tool calls, warns at 80 and 100 |
-| `pre-compact-save.sh` | PreCompact | Instructs Claude to save state before compression |
+| `session-start.sh` | SessionStart | Reads registry, injects workstream state into the context window. Auto-attaches if one active workstream; prompts for choice if multiple are active. Writes session marker. |
+| `context-monitor.sh` | PostToolUse | Counts tool calls, warns at 80 and 100 that the context window is filling up |
+| `pre-compact-save.sh` | PreCompact | Prompts Claude to save workstream state before context compression |
 | `session-end.sh` | SessionEnd | Cleans up temp files, updates `last_touched` timestamp |
 | `approve-scripts.sh` | PreToolUse | Auto-approves Bash commands targeting plugin scripts (no user prompt) |
 
@@ -211,13 +294,13 @@ On startup, the server scans `~/.claude/projects/` for JSONL transcript files an
 
 ## Complementary Systems
 
-relay handles **session state** (what you're working on, where you last saved). It complements, not replaces, Claude Code's built-in systems:
+relay handles **workstream state** (what you're working on, decisions made, next steps). It complements, not replaces, Claude Code's built-in systems:
 
 | System | Purpose | Example |
 |---|---|---|
 | Auto-memory (`MEMORY.md`) | Learnings about the codebase | "Use TypeORM migrations for schema changes" |
 | `CLAUDE.md` | Instructions for Claude | "Run tests with `npm test` before committing" |
-| **relay** | Session state + task switching + history search | "Working on auth migration, next: add OAuth" |
+| **relay** | Workstream state + project switching + history search | "Working on auth migration, next: add OAuth" |
 
 ## Migrating from Manual Workstreams
 
