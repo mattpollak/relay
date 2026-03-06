@@ -838,6 +838,46 @@ def summarize_activity(
 
 
 @mcp.tool()
+def save_workstream(
+    name: str,
+    state_content: str,
+    ctx: Context[ServerSession, AppContext],
+    session_id: str | None = None,
+    hint_summary: list[str] | None = None,
+    hint_decisions: list[str] | None = None,
+) -> dict:
+    """Save workstream state to disk and write session hint.
+
+    Atomically writes the state file (with backup), updates the registry
+    last_touched timestamp, and writes a session hint to the database.
+
+    Args:
+        name: Workstream name (e.g. "relay")
+        state_content: Full markdown content for state.md (keep under 80 lines)
+        session_id: Current session UUID (from relay-session-id context). If omitted, no hint is written.
+        hint_summary: 3-6 bullets describing what was accomplished this session
+        hint_decisions: Key decisions made (omit if none)
+    """
+    from .workstreams import get_data_dir
+    from .workstreams import save_workstream as _save
+
+    db_path = _get_db_path(ctx)
+    conn = get_connection(db_path)
+    try:
+        return _save(
+            data_dir=get_data_dir(),
+            conn=conn,
+            name=name,
+            state_content=state_content,
+            session_id=session_id,
+            hint_summary=hint_summary,
+            hint_decisions=hint_decisions,
+        )
+    finally:
+        conn.close()
+
+
+@mcp.tool()
 def reindex(ctx: Context[ServerSession, AppContext]) -> dict:
     """Force a complete re-index of all conversation transcripts.
 
