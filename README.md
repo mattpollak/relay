@@ -199,9 +199,11 @@ State files (`state.md`) are kept under 80 lines and contain:
 - Next steps
 - Recent session summaries (if space permits)
 
-Saves use an atomic three-step process: write new content to a temp file (`state.md.new`), back up the current file (`state.md` → `state.md.bak`, overwriting any previous backup), then rename the temp file into place (`state.md.new` → `state.md`). Each step overwrites its target, so stale files from a previous interrupted save are cleaned up automatically.
+Saves are handled by the `save_workstream` MCP tool, which atomically writes the state file (with `.bak` backup), updates the registry, and writes session hints and markers to the database — all in one call.
 
 ### MCP server
+
+The MCP server handles both workstream management and conversation search. Workstream operations (save, create, park, switch, list, ideas) use atomic file writes and SQLite transactions — each skill invocation is a single MCP call instead of multiple bash scripts.
 
 On startup, the server scans `~/.claude/projects/` for JSONL transcript files and incrementally indexes them into SQLite FTS5. First run takes 3-5 seconds; subsequent runs process only new/modified files (~0.01s). Auto-tagging runs during indexing — keyword heuristics classify messages by content type (reviews, plans, decisions, etc.) and sessions by activity (testing, deployment, browser usage).
 

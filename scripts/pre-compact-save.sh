@@ -36,33 +36,23 @@ STATE_FILE="$DATA_DIR/workstreams/$ACTIVE_NAME/state.md"
 cat <<EOF
 IMPORTANT: Context compaction is imminent. You MUST save the active workstream '${ACTIVE_NAME}' state NOW.
 
-Write an updated state file to: ${STATE_FILE}
+Call the save_workstream MCP tool:
 
-Use atomic overwrite:
-1. Write content to ${STATE_FILE}.new
-2. command mv ${STATE_FILE} ${STATE_FILE}.bak (if exists)
-3. command mv ${STATE_FILE}.new ${STATE_FILE}
+save_workstream(
+  name="${ACTIVE_NAME}",
+  state_content="<state markdown, under 80 lines>",
+  session_id="<from relay-session-id in your session context>",
+  hint_summary=["<3-6 bullets: what was accomplished>"],
+  hint_decisions=["<key decisions, if any — omit if none>"]
+)
 
-The state file must be under 80 lines and include:
+The state content must include:
 - Current status (what was being worked on)
 - Key decisions made
 - Next steps
 - Any blockers or important context that would be lost
 
-Then write a session hint file for efficient summarization.
-Use the session ID from the relay-session-id: line in your session context.
-bash "\${CLAUDE_PLUGIN_ROOT}/scripts/write-data-file.sh" "session-hints/\$(date -u +%Y-%m-%dT%H%M%SZ)-<session_id>.json" << 'HINTEOF'
-{
-  "session_id": "<session_id>",
-  "workstream": "${ACTIVE_NAME}",
-  "summary": ["<3-6 bullets: what was accomplished in this session segment>"],
-  "decisions": ["<key decisions, if any — omit field if none>"]
-}
-HINTEOF
-
-Then update the registry and reset the context monitor:
-bash "\${CLAUDE_PLUGIN_ROOT}/scripts/update-registry.sh" "${ACTIVE_NAME}"
-bash "\${CLAUDE_PLUGIN_ROOT}/scripts/reset-counter.sh"
+This single call handles: atomic state file write + backup, registry update, session hint to DB, and session marker.
 EOF
 
 exit 0

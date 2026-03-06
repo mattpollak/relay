@@ -14,6 +14,7 @@
 
 ### Changed
 - **All skills** (`save`, `new`, `park`, `switch`, `list`, `status`, `idea`) — Rewritten to use MCP tool calls instead of bash scripts. ~30 tool invocations per workflow cycle reduced to ~8.
+- **`pre-compact-save.sh`** — Now instructs Claude to use `save_workstream` MCP tool instead of bash scripts.
 - **`_read_marker_workstream`** — Now checks DB `session_markers` table first, falls back to JSON file.
 - **Session hints** — MCP tools write hints directly to `session_hints` table (no intermediate JSON files).
 

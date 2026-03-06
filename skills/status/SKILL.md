@@ -15,16 +15,19 @@ Show this session's attached workstream status, plus a summary of other workstre
 
 2. **Identify attached workstream.** Check the `relay:` line in your session context for the workstream name. If none, check the active workstreams from the response.
 
-3. **If an attached/active workstream exists:** Display:
+3. **If an attached/active workstream exists:** The workstream state was loaded into session context at session start (the block between `---` markers after the `relay:` line). Display:
    ```
    ## Attached: <name>
    **Description:** <description>
    **Project:** <project_dir or "none">
    **Last touched:** <last_touched>
-   ```
-   Then call `switch_workstream(to_name="<name>")` to get the current state content (this is a read-only operation -- if already attached, it just returns the state without saving anything). Display the Current Status and Next Steps sections from the state.
 
-   **Alternative:** If the workstream state was already loaded in session context (from session start), just display it directly without an extra MCP call.
+   ### Current Status
+   <Current Status section from state in session context>
+
+   ### Next Steps
+   <Next Steps section from state in session context, if present>
+   ```
 
 4. **If no attached workstream:** Say "No workstream attached to this session."
 
