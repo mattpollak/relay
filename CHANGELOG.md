@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.10.1] - 2026-03-06
+
+### Added
+- **`fix_other_hints` MCP tool** — Re-attributes session hints tagged `workstream='other'` using project-dir inference and slug chain propagation. Idempotent — safe to run repeatedly. Workflow: run `fix_other_hints`, tag remaining unknowns with `tag_session(id, ["workstream:X"])`, run again.
+- **Project-dir inference** — `summarize_activity` now infers workstream from session `project_dir` using longest-prefix match against the registry. Prefers non-completed workstreams for disambiguation.
+- **Slug chain propagation** — If any session in a slug chain has a known workstream (from hints, markers, or `workstream:*` session tags), all `other` sessions in the chain inherit it — both in `fix_other_hints` (data fix) and `summarize_activity` (query-time).
+
+### Fixed
+- **`_read_marker_workstream`** — Catches `OperationalError` when `session_markers` table doesn't exist (pre-v0.10.0 databases), falls back to file markers.
+
 ## [0.10.0] - 2026-03-05
 
 ### Added

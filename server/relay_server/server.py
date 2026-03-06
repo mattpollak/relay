@@ -654,12 +654,176 @@ def _read_marker_workstream(session_id: str, conn: sqlite3.Connection | None = N
         return None
 
 
+def _build_project_dir_mapping(data_dir: Path | None = None) -> dict[str, list[tuple[str, str]]]:
+    """Build a project_dir -> [(workstream_name, status)] mapping from the registry.
+
+    Used for inferring workstream from session project_dir when no hint or marker exists.
+    """
+    from .workstreams import get_data_dir, read_registry
+    project_dir_ws: dict[str, list[tuple[str, str]]] = {}
+    try:
+        reg = read_registry(data_dir=data_dir or get_data_dir())
+        for ws_name, ws_data in reg.get("workstreams", {}).items():
+            pdir = ws_data.get("project_dir", "")
+            if pdir:
+                status = ws_data.get("status", "active")
+                project_dir_ws.setdefault(pdir, []).append((ws_name, status))
+    except Exception:
+        pass  # Registry unreadable — skip inference
+    return project_dir_ws
+
+
+def _infer_workstream_from_project(
+    project_dir: str | None,
+    project_dir_ws: dict[str, list[tuple[str, str]]],
+) -> str | None:
+    """Infer workstream from project_dir using longest-prefix match.
+
+    When multiple workstreams share the same project_dir, prefers
+    non-completed workstreams. Returns None if still ambiguous.
+    """
+    if not project_dir or not project_dir_ws:
+        return None
+    # Find all workstream project_dirs that are a prefix of this session's project_dir
+    matches: list[tuple[str, list[tuple[str, str]]]] = []
+    for ws_pdir, ws_entries in project_dir_ws.items():
+        if project_dir == ws_pdir or project_dir.startswith(ws_pdir + "/"):
+            matches.append((ws_pdir, ws_entries))
+    if not matches:
+        return None
+    # Pick longest prefix (most specific match)
+    max_len = max(len(m[0]) for m in matches)
+    best = [entry for pdir, entries in matches if len(pdir) == max_len for entry in entries]
+    if len(best) == 1:
+        return best[0][0]
+    # Multiple matches — prefer non-completed workstreams
+    non_completed = [name for name, status in best if status != "completed"]
+    return non_completed[0] if len(non_completed) == 1 else None
+
+
+def _fix_other_hints_impl(
+    conn: sqlite3.Connection,
+    data_dir: Path | None = None,
+) -> dict:
+    """Re-attribute session_hints with workstream='other' using two strategies:
+
+    1. **Project-dir inference** — match session project_dir to workstream registry
+    2. **Slug chain propagation** — if any session in a slug chain has a known workstream,
+       apply it to all 'other' sessions in the same chain
+
+    Idempotent — safe to run multiple times. Only updates unambiguous matches.
+    """
+    fixed_by_project = 0
+    fixed_by_slug = 0
+
+    # Pass 1: Project-dir inference
+    project_dir_ws = _build_project_dir_mapping(data_dir=data_dir)
+    if project_dir_ws:
+        rows = conn.execute("""
+            SELECT h.id, h.session_id, s.project_dir
+            FROM session_hints h
+            JOIN sessions s ON s.session_id = h.session_id
+            WHERE h.workstream = 'other'
+        """).fetchall()
+
+        for row in rows:
+            inferred = _infer_workstream_from_project(row["project_dir"], project_dir_ws)
+            if inferred:
+                conn.execute(
+                    "UPDATE session_hints SET workstream = ? WHERE id = ?",
+                    (inferred, row["id"]),
+                )
+                fixed_by_project += 1
+
+        conn.commit()
+
+    # Pass 2: Slug chain propagation
+    # Find slugs that have both 'other' and non-'other' hints
+    slug_rows = conn.execute("""
+        SELECT s.slug, h.workstream
+        FROM session_hints h
+        JOIN sessions s ON s.session_id = h.session_id
+        WHERE s.slug IS NOT NULL
+    """).fetchall()
+
+    # Build slug -> set of known workstreams (from hints, markers, and session tags)
+    slug_workstreams: dict[str, set[str]] = {}
+    slugs_with_other: set[str] = set()
+    for row in slug_rows:
+        slug = row["slug"]
+        ws = row["workstream"]
+        if ws == "other":
+            slugs_with_other.add(slug)
+        else:
+            slug_workstreams.setdefault(slug, set()).add(ws)
+
+    # Add workstream info from session markers
+    if slugs_with_other:
+        marker_slugs = conn.execute("""
+            SELECT DISTINCT s.slug, sm.workstream
+            FROM session_markers sm
+            JOIN sessions s ON s.session_id = sm.session_id
+            WHERE s.slug IS NOT NULL
+        """).fetchall()
+        for row in marker_slugs:
+            slug_workstreams.setdefault(row["slug"], set()).add(row["workstream"])
+
+    # Add workstream info from session tags (workstream:*)
+    if slugs_with_other:
+        tag_rows = conn.execute("""
+            SELECT DISTINCT s.slug, st.tag
+            FROM session_tags st
+            JOIN sessions s ON s.session_id = st.session_id
+            WHERE s.slug IS NOT NULL
+            AND st.tag LIKE 'workstream:%'
+        """).fetchall()
+        for row in tag_rows:
+            ws_from_tag = row["tag"].split(":", 1)[1]
+            slug_workstreams.setdefault(row["slug"], set()).add(ws_from_tag)
+
+    # For slugs that have 'other' hints AND exactly one known workstream, propagate
+    for slug in slugs_with_other:
+        known = slug_workstreams.get(slug, set())
+        if len(known) == 1:
+            ws_name = next(iter(known))
+            result = conn.execute(
+                """UPDATE session_hints SET workstream = ?
+                   WHERE workstream = 'other'
+                   AND session_id IN (SELECT session_id FROM sessions WHERE slug = ?)""",
+                (ws_name, slug),
+            )
+            fixed_by_slug += result.rowcount
+
+    conn.commit()
+
+    remaining = conn.execute(
+        "SELECT COUNT(*) FROM session_hints WHERE workstream = 'other'"
+    ).fetchone()[0]
+
+    total_fixed = fixed_by_project + fixed_by_slug
+    parts = []
+    if fixed_by_project:
+        parts.append(f"{fixed_by_project} by project-dir")
+    if fixed_by_slug:
+        parts.append(f"{fixed_by_slug} by slug chain")
+    detail = f" ({', '.join(parts)})" if parts else ""
+
+    return {
+        "fixed": total_fixed,
+        "fixed_by_project": fixed_by_project,
+        "fixed_by_slug": fixed_by_slug,
+        "remaining_other": remaining,
+        "message": f"Re-attributed {total_fixed} hints{detail}. {remaining} remain as 'other'.",
+    }
+
+
 def _summarize_activity_impl(
     conn: sqlite3.Connection,
     date_from: str,
     date_to: str | None = None,
     workstream: str | None = None,
     markers_dir: Path | None = None,
+    data_dir: Path | None = None,
 ) -> str:
     """Build a markdown activity summary. Extracted for testability."""
     # 1. Query sessions in date range
@@ -708,14 +872,61 @@ def _summarize_activity_impl(
             segment["decisions"] = json.loads(row["decisions"])
         hints_by_session[sid].append(segment)
 
-    # 3. Build session-to-workstream mapping
+    # 3. Build project_dir -> workstream mapping for fallback inference.
+    from .workstreams import get_data_dir, read_registry
+    project_dir_ws = _build_project_dir_mapping(data_dir=data_dir)
+
+    # 4. Build slug -> known workstream mapping for slug chain propagation.
+    #    Sources: non-'other' hints, session markers, and workstream:* session tags.
+    slug_known_ws: dict[str, set[str]] = {}
+    for row in hint_rows:
+        ws = row["workstream"]
+        if ws != "other":
+            sid = row["session_id"]
+            s = next((s for s in sessions if s["session_id"] == sid), None)
+            if s and s.get("slug"):
+                slug_known_ws.setdefault(s["slug"], set()).add(ws)
+
+    # Also check session tags (workstream:*) for slug chain anchors
+    session_id_placeholders = ",".join("?" * len(session_ids))
+    tag_rows = conn.execute(
+        f"""SELECT st.session_id, st.tag
+            FROM session_tags st
+            WHERE st.session_id IN ({session_id_placeholders})
+            AND st.tag LIKE 'workstream:%'""",
+        session_ids,
+    ).fetchall()
+    for row in tag_rows:
+        ws_from_tag = row["tag"].split(":", 1)[1]
+        s = next((s for s in sessions if s["session_id"] == row["session_id"]), None)
+        if s and s.get("slug"):
+            slug_known_ws.setdefault(s["slug"], set()).add(ws_from_tag)
+
+    def _resolve_other_ws(session: dict) -> str:
+        """Resolve workstream for a session/hint tagged 'other'."""
+        sid = session["session_id"]
+        slug = session.get("slug")
+        # 1. Slug chain propagation (high confidence)
+        if slug and slug in slug_known_ws:
+            known = slug_known_ws[slug]
+            if len(known) == 1:
+                return next(iter(known))
+        # 2. Session marker
+        marker_ws = _read_marker_workstream(sid, conn=conn, markers_dir=markers_dir)
+        if marker_ws:
+            return marker_ws
+        # 3. Project-dir inference
+        inferred = _infer_workstream_from_project(session.get("project_dir"), project_dir_ws)
+        if inferred:
+            return inferred
+        return "other"
+
+    # 5. Build session-to-workstream mapping
     #    Each session may have multiple hint segments (different workstreams).
-    #    Sessions without hints fall back to marker files.
+    #    Hints with workstream='other' are re-resolved using the fallback chain.
     #    Structure: workstream -> [{session, slug, date, bullets, decisions}]
     ws_groups: dict[str, list[dict]] = {}
     no_hint_sessions = []
-
-    session_lookup = {s["session_id"]: s for s in sessions}
 
     for s in sessions:
         sid = s["session_id"]
@@ -724,6 +935,8 @@ def _summarize_activity_impl(
         if segments:
             for seg in segments:
                 ws = seg["workstream"]
+                if ws == "other":
+                    ws = _resolve_other_ws(s)
                 ws_groups.setdefault(ws, [])
                 ws_groups[ws].append({
                     "session_id": sid,
@@ -734,9 +947,7 @@ def _summarize_activity_impl(
                     "decisions": seg.get("decisions"),
                 })
         else:
-            # Try session marker
-            marker_ws = _read_marker_workstream(sid, conn=conn, markers_dir=markers_dir)
-            ws = marker_ws or "other"
+            ws = _resolve_other_ws(s)
             ws_groups.setdefault(ws, [])
             ws_groups[ws].append({
                 "session_id": sid,
@@ -1024,3 +1235,20 @@ def reindex(ctx: Context[ServerSession, AppContext]) -> dict:
         "sessions_found": stats["sessions"],
         "duration_seconds": stats["duration_seconds"],
     }
+
+
+@mcp.tool()
+def fix_other_hints(ctx: Context[ServerSession, AppContext]) -> dict:
+    """Re-attribute session hints tagged as 'other' to the correct workstream.
+
+    Uses project_dir matching to infer workstream for hints that were
+    created with workstream='other' (e.g. from backfill before markers existed).
+    Idempotent — safe to run multiple times. Only updates hints where the
+    match is unambiguous.
+    """
+    db_path = _get_db_path(ctx)
+    conn = get_connection(db_path)
+    try:
+        return _fix_other_hints_impl(conn)
+    finally:
+        conn.close()
