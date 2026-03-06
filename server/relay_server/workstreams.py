@@ -238,3 +238,101 @@ def save_workstream(
         "backup": str(bak_path) if bak_path.exists() else None,
         "hint_written": bool(session_id and hint_summary),
     }
+
+
+def switch_workstream(
+    *,
+    data_dir: Path,
+    conn: sqlite3.Connection,
+    to_name: str,
+    from_name: str | None = None,
+    state_content: str | None = None,
+    session_id: str | None = None,
+    hint_summary: list[str] | None = None,
+    hint_decisions: list[str] | None = None,
+) -> dict:
+    """Switch session from one workstream to another.
+
+    Saves current workstream (if from_name provided), activates target,
+    writes session marker, returns target state content.
+    """
+    registry = read_registry(data_dir)
+    if to_name not in registry["workstreams"]:
+        return {"status": "error", "message": f"Workstream '{to_name}' not found"}
+
+    # Save current workstream if provided
+    if from_name and state_content:
+        save_workstream(
+            data_dir=data_dir,
+            conn=conn,
+            name=from_name,
+            state_content=state_content,
+            session_id=session_id,
+            hint_summary=hint_summary,
+            hint_decisions=hint_decisions,
+        )
+
+    # Activate target
+    registry = read_registry(data_dir)  # re-read after save
+    registry["workstreams"][to_name]["status"] = "active"
+    registry["workstreams"][to_name]["last_touched"] = today()
+    atomic_write(data_dir / "workstreams.json", json.dumps(registry, indent=2) + "\n")
+
+    # Write session marker
+    if session_id:
+        conn.execute(
+            """INSERT OR REPLACE INTO session_markers
+               (session_id, workstream, attached_at)
+               VALUES (?, ?, ?)""",
+            (session_id, to_name, utc_timestamp()),
+        )
+        conn.commit()
+
+    # Read target state
+    target_state = ""
+    state_path = data_dir / "workstreams" / to_name / "state.md"
+    if state_path.exists():
+        target_state = state_path.read_text()
+
+    # Read supplementary files
+    supplementary = {}
+    for extra in ("plan.md", "architecture.md"):
+        extra_path = data_dir / "workstreams" / to_name / extra
+        if extra_path.exists():
+            supplementary[extra] = extra_path.read_text()
+
+    return {
+        "status": "switched",
+        "from": from_name,
+        "to": to_name,
+        "target_state": target_state,
+        "supplementary": supplementary,
+        "project_dir": registry["workstreams"][to_name].get("project_dir", ""),
+    }
+
+
+def list_workstreams(*, data_dir: Path) -> dict:
+    """List all workstreams grouped by status, plus ideas."""
+    registry = read_registry(data_dir)
+
+    groups: dict[str, list] = {"active": [], "parked": [], "completed": []}
+    for name, ws in registry.get("workstreams", {}).items():
+        status = ws.get("status", "parked")
+        bucket = groups.get(status, groups["parked"])
+        bucket.append({
+            "name": name,
+            "description": ws.get("description", ""),
+            "last_touched": ws.get("last_touched", ""),
+            "project_dir": ws.get("project_dir", ""),
+        })
+
+    # Read ideas
+    ideas = []
+    ideas_path = data_dir / "ideas.json"
+    if ideas_path.exists():
+        try:
+            ideas = json.loads(ideas_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return {**groups, "ideas": ideas}

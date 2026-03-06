@@ -929,6 +929,56 @@ def park_workstream(
 
 
 @mcp.tool()
+def switch_workstream(
+    to_name: str,
+    ctx: Context[ServerSession, AppContext],
+    from_name: str | None = None,
+    state_content: str | None = None,
+    session_id: str | None = None,
+    hint_summary: list[str] | None = None,
+    hint_decisions: list[str] | None = None,
+) -> dict:
+    """Switch session to a different workstream. Saves current first if provided.
+
+    Both workstreams stay active. Returns the target workstream's state content
+    and any supplementary files (plan.md, architecture.md).
+
+    Args:
+        to_name: Target workstream name
+        from_name: Current workstream name (if saving before switch)
+        state_content: State to save for current workstream (required if from_name set)
+        session_id: Current session UUID (from relay-session-id context)
+        hint_summary: Bullets for current workstream session hint
+        hint_decisions: Decisions for current workstream session hint
+    """
+    from .workstreams import get_data_dir
+    from .workstreams import switch_workstream as _switch
+
+    db_path = _get_db_path(ctx)
+    conn = get_connection(db_path)
+    try:
+        return _switch(
+            data_dir=get_data_dir(), conn=conn, to_name=to_name, from_name=from_name,
+            state_content=state_content, session_id=session_id,
+            hint_summary=hint_summary, hint_decisions=hint_decisions,
+        )
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def list_workstreams(ctx: Context[ServerSession, AppContext]) -> dict:
+    """List all workstreams grouped by status (active, parked, completed) plus ideas.
+
+    Returns structured data with workstream names, descriptions, last_touched dates,
+    and any captured ideas.
+    """
+    from .workstreams import get_data_dir
+    from .workstreams import list_workstreams as _list
+    return _list(data_dir=get_data_dir())
+
+
+@mcp.tool()
 def reindex(ctx: Context[ServerSession, AppContext]) -> dict:
     """Force a complete re-index of all conversation transcripts.
 
