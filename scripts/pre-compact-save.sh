@@ -5,19 +5,29 @@ set -euo pipefail
 trap 'exit 0' ERR
 source "$(dirname "$0")/common.sh"
 
-REGISTRY="$DATA_DIR/workstreams.json"
+# Read stdin for session_id
+INPUT=$(cat)
 
-# Check jq and registry exist
-if ! command -v jq &>/dev/null || [ ! -f "$REGISTRY" ]; then
+# Check jq is available
+if ! command -v jq &>/dev/null; then
   echo "IMPORTANT: Context compaction is about to occur. If you are tracking work in a workstream, save your state now."
   exit 0
 fi
 
-# Find active workstream
-ACTIVE_NAME=$(jq -r '[.workstreams | to_entries[] | select(.value.status == "active")] | first | .key // empty' "$REGISTRY" 2>/dev/null || true)
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
+
+# Find workstream from session marker (not active status — multiple may be active)
+ACTIVE_NAME=""
+if [ -n "$SESSION_ID" ]; then
+  MARKER_FILE="$DATA_DIR/session-markers/${SESSION_ID}.json"
+  if [ -f "$MARKER_FILE" ]; then
+    ACTIVE_NAME=$(jq -r '.workstream // empty' "$MARKER_FILE" 2>/dev/null || true)
+  fi
+fi
 
 # Validate workstream name format (lowercase alphanum + dashes)
 if [ -z "$ACTIVE_NAME" ] || ! [[ "$ACTIVE_NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+  echo "IMPORTANT: Context compaction is about to occur. If you are tracking work in a workstream, save your state now with /relay:save."
   exit 0
 fi
 
