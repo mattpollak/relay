@@ -13,7 +13,8 @@
 ## What You Get
 
 - **Auto-loaded context** — Every session starts with your active workstream's state already in context. No re-explaining, no "let me catch you up."
-- **One-command switching** — `/relay:switch auth-migration` saves your current context, loads the new project's state, and you're coding in seconds.
+- **Multi-instance support** — Run multiple Claude instances in parallel, each attached to a different active workstream. No conflicts, no fighting over the "active" slot.
+- **One-command switching** — `/relay:switch auth-migration` saves your current context, loads the new project's state, and you're coding in seconds. Both workstreams stay active.
 - **Context protection** — Warnings at ~80 and ~100 tool calls so you can save before compaction hits. PreCompact hook prompts a save before context is compressed.
 - **Full conversation search** — MCP server indexes every Claude Code transcript into searchable SQLite FTS5. Find that architecture decision from two weeks ago.
 - **Auto-tagging** — Messages tagged by content type (UX reviews, plans, decisions, investigations) so high-value content surfaces without remembering exact phrases.
@@ -172,7 +173,7 @@ The conversation search index lives at `~/.local/share/relay/index.db` (SQLite, 
 
 | Hook | Event | What it does |
 |---|---|---|
-| `session-start.sh` | SessionStart | Reads registry, injects active workstream's `state.md` into context. Writes session marker linking session ID to active workstream. |
+| `session-start.sh` | SessionStart | Reads registry, injects workstream state into context. Auto-attaches if one active workstream; prompts for choice if multiple are active. Writes session marker. |
 | `context-monitor.sh` | PostToolUse | Counts tool calls, warns at 80 and 100 |
 | `pre-compact-save.sh` | PreCompact | Instructs Claude to save state before compression |
 | `session-end.sh` | SessionEnd | Cleans up temp files, updates `last_touched` timestamp |
