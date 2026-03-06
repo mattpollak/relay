@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.2] - 2026-03-06
+
+### Changed
+- **`/relay:summarize` skill** — Writes full summary to `/tmp/relay-summary-<date>.md` instead of displaying inline. Large summaries (50KB+) were being truncated. Shows brief overview (workstream names + session counts) inline with file path.
+
+### Added
+- **`CLAUDE.md`** — Project instructions including versioning rules (which files to bump, semver guidelines).
+
 ## [0.10.1] - 2026-03-06
 
 ### Added
