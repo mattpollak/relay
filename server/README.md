@@ -11,6 +11,7 @@ MCP server for searching Claude Code conversation history. Indexes JSONL transcr
 - **tag_session** — Manually tag a session (e.g., associate with a workstream)
 - **list_tags** — List all tags with counts, filterable by scope (message/session/all)
 - **get_session_summaries** — Get pre-written session summaries (hint segments with summary bullets and decisions)
+- **summarize_activity** — Summarize recent activity grouped by workstream. Returns pre-formatted markdown with session bullets, decisions, and metadata. Joins sessions + hints + session markers server-side.
 - **reindex** — Force a complete re-index from scratch
 
 ## Usage

@@ -118,6 +118,7 @@ The MCP server provides tools that Claude can use directly during your session:
 | `tag_session` | Manually tag a session (e.g., associate with a workstream) |
 | `list_tags` | List all tags with counts — see what's been auto-detected |
 | `get_session_summaries` | Get pre-written session summaries (hint segments with bullets and decisions) |
+| `summarize_activity` | Summarize recent activity grouped by workstream — returns pre-formatted markdown. Powers `/relay:summarize`. |
 | `reindex` | Force a complete re-index from scratch |
 
 **Session-level addressing:** When a conversation spans multiple sessions (via "continue"), you can address specific sessions:

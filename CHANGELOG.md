@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.2] - 2026-03-05
+
+### Added
+- **`summarize_activity` MCP tool** — Server-side activity summarization. Joins sessions, hints, and session markers, groups by workstream, returns pre-formatted markdown. Replaces multi-call client-side assembly in `/relay:summarize`.
+
+### Changed
+- **`/relay:summarize` skill** — Simplified to a single `summarize_activity` MCP call + pass-through. No more manual session listing, hint fetching, marker reading, or client-side grouping.
+
 ## [0.9.1] - 2026-03-05
 
 ### Fixed

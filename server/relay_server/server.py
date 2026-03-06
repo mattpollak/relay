@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -616,6 +617,222 @@ def get_session_summaries(
     conn = get_connection(db_path)
     try:
         return _get_session_summaries_from_db(conn, session_ids)
+    finally:
+        conn.close()
+
+
+def _get_markers_dir() -> Path:
+    """Return the session markers directory path."""
+    return Path(
+        os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+    ) / "relay" / "session-markers"
+
+
+def _read_marker_workstream(session_id: str, markers_dir: Path | None = None) -> str | None:
+    """Read workstream name from a session marker file. Returns None if not found."""
+    if markers_dir is None:
+        markers_dir = _get_markers_dir()
+    marker_path = markers_dir / f"{session_id}.json"
+    if not marker_path.exists():
+        return None
+    try:
+        with open(marker_path) as f:
+            data = json.load(f)
+        return data.get("workstream")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _summarize_activity_impl(
+    conn: sqlite3.Connection,
+    date_from: str,
+    date_to: str | None = None,
+    workstream: str | None = None,
+    markers_dir: Path | None = None,
+) -> str:
+    """Build a markdown activity summary. Extracted for testability."""
+    # 1. Query sessions in date range
+    where_clauses = ["s.last_timestamp >= ?"]
+    params: list = [date_from]
+    if date_to:
+        end = date_to + "T23:59:59Z" if "T" not in date_to else date_to
+        where_clauses.append("s.first_timestamp <= ?")
+        params.append(end)
+
+    where = "WHERE " + " AND ".join(where_clauses)
+    rows = conn.execute(
+        f"""SELECT s.session_id, s.slug, s.project_dir, s.first_timestamp,
+                   s.last_timestamp, s.message_count
+            FROM sessions s {where}
+            ORDER BY s.first_timestamp ASC""",
+        params,
+    ).fetchall()
+
+    sessions = [dict(r) for r in rows]
+    if not sessions:
+        return f"## Activity Summary: {date_from} – {date_to or 'now'}\n\nNo sessions found in this range."
+
+    session_ids = [s["session_id"] for s in sessions]
+
+    # 2. Fetch all hints for these sessions
+    placeholders = ",".join("?" * len(session_ids))
+    hint_rows = conn.execute(
+        f"""SELECT session_id, workstream, summary, decisions
+            FROM session_hints
+            WHERE session_id IN ({placeholders})
+            ORDER BY session_id, timestamp ASC""",
+        session_ids,
+    ).fetchall()
+
+    # Group hints by session_id
+    hints_by_session: dict[str, list[dict]] = {}
+    for row in hint_rows:
+        sid = row["session_id"]
+        hints_by_session.setdefault(sid, [])
+        segment = {
+            "workstream": row["workstream"],
+            "summary": json.loads(row["summary"]),
+        }
+        if row["decisions"]:
+            segment["decisions"] = json.loads(row["decisions"])
+        hints_by_session[sid].append(segment)
+
+    # 3. Build session-to-workstream mapping
+    #    Each session may have multiple hint segments (different workstreams).
+    #    Sessions without hints fall back to marker files.
+    #    Structure: workstream -> [{session, slug, date, bullets, decisions}]
+    ws_groups: dict[str, list[dict]] = {}
+    no_hint_sessions = []
+
+    session_lookup = {s["session_id"]: s for s in sessions}
+
+    for s in sessions:
+        sid = s["session_id"]
+        segments = hints_by_session.get(sid)
+
+        if segments:
+            for seg in segments:
+                ws = seg["workstream"]
+                ws_groups.setdefault(ws, [])
+                ws_groups[ws].append({
+                    "session_id": sid,
+                    "slug": s.get("slug"),
+                    "date": (s["first_timestamp"] or "")[:10],
+                    "message_count": s.get("message_count", 0),
+                    "summary": seg["summary"],
+                    "decisions": seg.get("decisions"),
+                })
+        else:
+            # Try session marker
+            marker_ws = _read_marker_workstream(sid, markers_dir)
+            ws = marker_ws or "other"
+            ws_groups.setdefault(ws, [])
+            ws_groups[ws].append({
+                "session_id": sid,
+                "slug": s.get("slug"),
+                "date": (s["first_timestamp"] or "")[:10],
+                "message_count": s.get("message_count", 0),
+                "summary": None,
+                "decisions": None,
+            })
+            no_hint_sessions.append(sid)
+
+    # 4. Filter by workstream if requested
+    if workstream:
+        ws_groups = {k: v for k, v in ws_groups.items() if k == workstream}
+
+    # 5. Format as markdown
+    end_label = date_to or "now"
+    lines = [f"## Activity Summary: {date_from} – {end_label}\n"]
+
+    # Sort workstreams by session count (descending), "other" last
+    sorted_ws = sorted(
+        ws_groups.items(),
+        key=lambda x: (x[0] == "other", -len(x[1])),
+    )
+
+    for ws_name, entries in sorted_ws:
+        lines.append(f"### {ws_name} ({len(entries)} session{'s' if len(entries) != 1 else ''})\n")
+
+        # Group entries by slug for compact display
+        slug_groups: dict[str | None, list[dict]] = {}
+        for entry in entries:
+            slug_groups.setdefault(entry["slug"], []).append(entry)
+
+        for slug, slug_entries in slug_groups.items():
+            # Header: slug (or session ID if no slug) with date range
+            dates = sorted(set(e["date"] for e in slug_entries if e["date"]))
+            date_str = dates[0] if len(dates) == 1 else f"{dates[0]} – {dates[-1]}" if dates else ""
+
+            if slug:
+                lines.append(f"**`{slug}`** ({date_str})")
+            else:
+                # No slug — show as individual brief entries
+                for e in slug_entries:
+                    lines.append(f"- {e['date']}: {e['message_count']} messages (no slug)")
+                continue
+
+            # Collect all bullets and decisions across entries in this slug group
+            all_bullets: list[str] = []
+            all_decisions: list[str] = []
+            has_hints = False
+            for e in slug_entries:
+                if e["summary"]:
+                    has_hints = True
+                    all_bullets.extend(e["summary"])
+                if e.get("decisions"):
+                    all_decisions.extend(e["decisions"])
+
+            if has_hints:
+                # Deduplicate bullets (hints from multiple segments may overlap)
+                seen: set[str] = set()
+                for bullet in all_bullets:
+                    if bullet not in seen:
+                        seen.add(bullet)
+                        lines.append(f"- {bullet}")
+                if all_decisions:
+                    seen_d: set[str] = set()
+                    for d in all_decisions:
+                        if d not in seen_d:
+                            seen_d.add(d)
+                            lines.append(f"  - *Decision: {d}*")
+            else:
+                total_msgs = sum(e["message_count"] for e in slug_entries)
+                lines.append(f"- {total_msgs} messages (no hints — run `/relay:backfill`)")
+
+            lines.append("")  # blank line between slug groups
+
+    # Footer
+    if no_hint_sessions:
+        lines.append(f"---\n*{len(no_hint_sessions)} session(s) without hints. Run `/relay:backfill` to generate summaries.*")
+
+    lines.append(f"\n*{len(sessions)} sessions total. Use `get_conversation(\"<slug>\")` to drill into any session.*")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def summarize_activity(
+    date_from: str,
+    ctx: Context[ServerSession, AppContext],
+    date_to: str | None = None,
+    workstream: str | None = None,
+) -> str:
+    """Summarize recent activity grouped by workstream.
+
+    Returns a pre-formatted markdown summary with session bullets and decisions.
+    Uses session hints for summarized sessions, falls back to session markers
+    for workstream attribution, and shows metadata-only for uncovered sessions.
+
+    Args:
+        date_from: Start date (ISO format, e.g. "2026-02-19")
+        date_to: End date (ISO format). Defaults to now.
+        workstream: Filter to a single workstream name
+    """
+    db_path = _get_db_path(ctx)
+    conn = get_connection(db_path)
+    try:
+        return _summarize_activity_impl(conn, date_from, date_to, workstream)
     finally:
         conn.close()
 
