@@ -43,6 +43,11 @@ mkdir -p "$MARKER_DIR"
 jq -n --arg ws "$NAME" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   '{workstream: $ws, timestamp: $ts}' > "$MARKER_DIR/${SESSION_ID}.json"
 
+# Write session-workstream mapping for statusline
+SW_DIR="$DATA_DIR/session-workstreams"
+mkdir -p "$SW_DIR"
+printf '%s' "$NAME" > "$SW_DIR/${SESSION_ID}"
+
 # Check for other live sessions on the same workstream
 WARNING=""
 for counter_file in "${COUNTER_PREFIX}"-*.count; do

@@ -19,20 +19,30 @@ RELAY_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/relay/relay.json"
 enable_color=true
 enable_title=true
 if [ -f "$RELAY_CONFIG" ] && command -v jq &>/dev/null; then
-  cfg_color=$(jq -r '.terminal_color // true' "$RELAY_CONFIG" 2>/dev/null)
-  cfg_title=$(jq -r '.terminal_title // true' "$RELAY_CONFIG" 2>/dev/null)
+  read -r cfg_color cfg_title <<< "$(jq -r '[.terminal_color // true, .terminal_title // true] | @tsv' "$RELAY_CONFIG" 2>/dev/null)"
   [ "$cfg_color" = "false" ] && enable_color=false
   [ "$cfg_title" = "false" ] && enable_title=false
 fi
 
-# Find active workstream from relay registry
-RELAY_REGISTRY="${XDG_CONFIG_HOME:-$HOME/.config}/relay/workstreams.json"
+# Determine active workstream for this session
+RELAY_DATA="${XDG_CONFIG_HOME:-$HOME/.config}/relay"
+RELAY_REGISTRY="$RELAY_DATA/workstreams.json"
+session_id=$(echo "$input" | jq -r '.session_id // ""')
 workstream=""
-if [ -f "$RELAY_REGISTRY" ] && command -v jq &>/dev/null; then
-  workstream=$(jq -r '
-    [.workstreams | to_entries[] | select(.value.status == "active") | .key]
-    | if length == 1 then .[0] else "" end
-  ' "$RELAY_REGISTRY" 2>/dev/null || true)
+
+if command -v jq &>/dev/null && [ -f "$RELAY_REGISTRY" ]; then
+  # Strategy 1: session-specific mapping file (written by switch/attach)
+  if [ -n "$session_id" ] && [ -f "$RELAY_DATA/session-workstreams/${session_id}" ]; then
+    workstream=$(cat "$RELAY_DATA/session-workstreams/${session_id}" 2>/dev/null)
+  fi
+
+  # Strategy 2: if only one active workstream, use it
+  if [ -z "$workstream" ]; then
+    workstream=$(jq -r '
+      [.workstreams | to_entries[] | select(.value.status == "active") | .key]
+      | if length == 1 then .[0] else "" end
+    ' "$RELAY_REGISTRY" 2>/dev/null || true)
+  fi
 fi
 
 # Set background color

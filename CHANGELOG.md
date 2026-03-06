@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.1] - 2026-03-06
+
+### Fixed
+- **Statusline with multiple active workstreams** — Uses session-specific mapping files (`session-workstreams/<session_id>`) to track which workstream each session is attached to, instead of scanning the registry for a single active workstream. Fixes blank statusline/title when multiple workstreams are active.
+- **Statusline config efficiency** — Combined two `jq` calls for reading `terminal_color`/`terminal_title` into one.
+
+### Changed
+- **`attach-workstream.sh`** — Writes session-workstream mapping on attach.
+- **`switch_workstream` MCP tool** — Writes session-workstream mapping on switch.
+- **`session-end.sh`** — Cleans up session-workstream mapping on exit.
+
 ## [0.11.0] - 2026-03-06
 
 ### Added

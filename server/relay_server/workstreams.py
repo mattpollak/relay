@@ -291,6 +291,11 @@ def switch_workstream(
         )
         conn.commit()
 
+        # Write session-workstream mapping for statusline
+        sw_dir = data_dir / "session-workstreams"
+        sw_dir.mkdir(parents=True, exist_ok=True)
+        (sw_dir / session_id).write_text(to_name)
+
     # Read target state
     target_state = ""
     state_path = data_dir / "workstreams" / to_name / "state.md"
