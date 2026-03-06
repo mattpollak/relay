@@ -26,9 +26,7 @@ Create a new workstream with the name and description provided in `$ARGUMENTS`.
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/read-data-file.sh" "workstreams.json"
    ```
 
-5. **Auto-park active workstream.** If any workstream has `"status": "active"`, set it to `"parked"` and update its `last_touched` to today. Tell the user you're parking it.
-
-6. **Create workstream directory and state file.** Read the template and write the initial state, replacing `{{NAME}}` with the name, `{{DESCRIPTION}}` with the description, `{{DATE}}` with today's date (YYYY-MM-DD), and `{{PROJECT_DIR}}` with the current working directory:
+5. **Create workstream directory and state file.** Read the template and write the initial state, replacing `{{NAME}}` with the name, `{{DESCRIPTION}}` with the description, `{{DATE}}` with today's date (YYYY-MM-DD), and `{{PROJECT_DIR}}` with the current working directory:
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/write-data-file.sh" "workstreams/<name>/state.md" << 'STATEEOF'
    <expanded template content>
@@ -36,12 +34,12 @@ Create a new workstream with the name and description provided in `$ARGUMENTS`.
    ```
    The template is at `${CLAUDE_PLUGIN_ROOT}/templates/state.md` — read it with the Read tool, then expand the placeholders before writing.
 
-7. **Update registry.** Add the new workstream to the registry:
+6. **Update registry.** Add the new workstream to the registry:
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/new-registry.sh" "<name>" "<description>" "$(pwd)"
    ```
 
-8. **Check for matching ideas.** Read the ideas file:
+7. **Check for matching ideas.** Read the ideas file:
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/read-data-file.sh" "ideas.json"
    ```
@@ -52,4 +50,4 @@ Create a new workstream with the name and description provided in `$ARGUMENTS`.
    EOF
    ```
 
-9. **Confirm.** Tell the user the workstream was created and is now active. Show the path to the state file.
+8. **Confirm.** Tell the user the workstream was created and is now active. Show the path to the state file.
