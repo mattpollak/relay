@@ -26,21 +26,19 @@ if [ -n "$SESSION_ID" ]; then
   rm -f "${COUNTER_PREFIX}-${SESSION_ID}.count"
 fi
 
-# Update last_touched on active workstream
+# Update last_touched using session marker (not active status — multiple may be active)
 REGISTRY="$DATA_DIR/workstreams.json"
+MARKER_FILE="$DATA_DIR/session-markers/${SESSION_ID}.json"
 
-if [ ! -f "$REGISTRY" ]; then
-  exit 0
-fi
-
-ACTIVE_NAME=$(jq -r '[.workstreams | to_entries[] | select(.value.status == "active")] | first | .key // empty' "$REGISTRY" 2>/dev/null || true)
-
-if [ -n "$ACTIVE_NAME" ]; then
-  TODAY=$(date +%Y-%m-%d)
-  jq --arg name "$ACTIVE_NAME" --arg date "$TODAY" \
-    '.workstreams[$name].last_touched = $date' \
-    "$REGISTRY" > "$REGISTRY.tmp" 2>/dev/null && \
-  command mv "$REGISTRY.tmp" "$REGISTRY" 2>/dev/null || true
+if [ -f "$REGISTRY" ] && [ -n "$SESSION_ID" ] && [ -f "$MARKER_FILE" ]; then
+  WS_NAME=$(jq -r '.workstream // empty' "$MARKER_FILE" 2>/dev/null || true)
+  if [ -n "$WS_NAME" ]; then
+    TODAY=$(date +%Y-%m-%d)
+    jq --arg name "$WS_NAME" --arg date "$TODAY" \
+      '.workstreams[$name].last_touched = $date' \
+      "$REGISTRY" > "$REGISTRY.tmp" 2>/dev/null && \
+    command mv "$REGISTRY.tmp" "$REGISTRY" 2>/dev/null || true
+  fi
 fi
 
 exit 0
