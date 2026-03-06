@@ -18,6 +18,19 @@ from .indexer import index_all, reindex as do_reindex
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_SUMMARY_DIR = "~/.local/share/relay/summaries"
+
+
+def _get_config() -> dict:
+    """Read ~/.config/relay/relay.json. Returns empty dict on any error."""
+    config_path = Path(
+        os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+    ) / "relay" / "relay.json"
+    try:
+        return json.loads(config_path.read_text()) if config_path.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
 
 @dataclass
 class AppContext:
@@ -1039,24 +1052,53 @@ def summarize_activity(
     ctx: Context[ServerSession, AppContext],
     date_to: str | None = None,
     workstream: str | None = None,
-) -> str:
+    output_dir: str | None = None,
+) -> dict:
     """Summarize recent activity grouped by workstream.
 
-    Returns a pre-formatted markdown summary with session bullets and decisions.
-    Uses session hints for summarized sessions, falls back to session markers
-    for workstream attribution, and shows metadata-only for uncovered sessions.
+    Writes full markdown summary to a file and returns the file path
+    with a brief overview (workstream names and session counts).
+
+    Output directory precedence: output_dir param > config file > default.
 
     Args:
         date_from: Start date (ISO format, e.g. "2026-02-19")
         date_to: End date (ISO format). Defaults to now.
         workstream: Filter to a single workstream name
+        output_dir: Directory to write summary file (overrides config)
     """
     db_path = _get_db_path(ctx)
     conn = get_connection(db_path)
     try:
-        return _summarize_activity_impl(conn, date_from, date_to, workstream)
+        markdown = _summarize_activity_impl(conn, date_from, date_to, workstream)
     finally:
         conn.close()
+
+    # Resolve output directory: param > config > default
+    if not output_dir:
+        config = _get_config()
+        output_dir = config.get("summary_dir")
+    if not output_dir:
+        output_dir = _DEFAULT_SUMMARY_DIR
+
+    out_dir = Path(os.path.expanduser(output_dir))
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    suffix = f"-{workstream}" if workstream else ""
+    out_path = out_dir / f"relay-summary-{date_from}{suffix}.md"
+    out_path.write_text(markdown, encoding="utf-8")
+
+    # Build overview from section headers
+    overview = []
+    for line in markdown.split("\n"):
+        if line.startswith("### "):
+            overview.append(line.removeprefix("### "))
+
+    return {
+        "file": str(out_path),
+        "overview": overview,
+        "date_range": f"{date_from} – {date_to or 'now'}",
+    }
 
 
 @mcp.tool()

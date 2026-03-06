@@ -200,7 +200,7 @@ The MCP server provides tools that Claude uses directly during your session — 
 | `switch_workstream` | Save current workstream, activate target, write session marker, return target state |
 | `list_workstreams` | List all workstreams grouped by status (active, parked, completed) plus ideas |
 | `manage_idea` | Add, remove, or list ideas for future work |
-| `summarize_activity` | Summarize recent activity grouped by workstream — returns pre-formatted markdown |
+| `summarize_activity` | Summarize recent activity grouped by workstream — writes markdown to file, returns path + overview |
 
 **Conversation search:**
 
@@ -241,10 +241,11 @@ The MCP server provides tools that Claude uses directly during your session — 
 
 ## Data Storage
 
-Data is stored at `${XDG_CONFIG_HOME:-$HOME/.config}/relay/`:
+Configuration lives at `${XDG_CONFIG_HOME:-$HOME/.config}/relay/`:
 
 ```
 ~/.config/relay/
+├── relay.json                    # Server-level config (optional — see below)
 ├── workstreams.json              # Central registry
 ├── ideas.json                    # Pre-workstream ideas (shown in /relay:list)
 ├── session-markers/              # Links session IDs to workstreams (written by hooks; also stored in DB by MCP tools)
@@ -261,6 +262,24 @@ Data is stored at `${XDG_CONFIG_HOME:-$HOME/.config}/relay/`:
 ```
 
 The conversation search index lives at `~/.local/share/relay/index.db` (SQLite, WAL mode).
+
+Activity summaries are written to `~/.local/share/relay/summaries/` by default (configurable — see below).
+
+### Configuration
+
+Optional server-level settings in `~/.config/relay/relay.json`:
+
+```json
+{
+  "summary_dir": "~/Documents/relay-summaries"
+}
+```
+
+| Key | What it does | Default |
+|---|---|---|
+| `summary_dir` | Directory for `/relay:summarize` output files | `~/.local/share/relay/summaries` |
+
+The file is optional — relay works fine without it. Missing or malformed files are silently ignored. The `output_dir` parameter on `summarize_activity` overrides the config value.
 
 ## How It Works
 

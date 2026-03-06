@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.3] - 2026-03-06
+
+### Changed
+- **`summarize_activity` MCP tool** — Writes full markdown to a file and returns `{file, overview, date_range}` instead of raw markdown. Prevents 50KB+ responses from flooding the context window.
+- **Summary output directory** — 3-tier config: `output_dir` param > `summary_dir` in `~/.config/relay/relay.json` > default `~/.local/share/relay/summaries/`.
+
+### Added
+- **`~/.config/relay/relay.json`** — Server-level config file. Gracefully handles missing or malformed files.
+
 ## [0.10.2] - 2026-03-06
 
 ### Changed

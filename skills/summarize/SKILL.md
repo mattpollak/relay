@@ -27,10 +27,6 @@ Generate a summary of recent Claude Code sessions grouped by workstream.
    ```
    summarize_activity(date_from=DATE_FROM)
    ```
-   This returns a pre-formatted markdown summary grouped by workstream, with session bullets, decisions, and metadata.
+   This writes the full markdown summary to a file and returns `{file, overview, date_range}`.
 
-3. **Write to file.** The summary is typically too large to display inline. Write the markdown result to a file:
-   - **Path:** `/tmp/relay-summary-DATE_FROM.md`
-   - Use the Write tool (not Bash) to create the file.
-
-4. **Tell the user.** Print the file path so they can open it. Include a brief 2-3 line overview (workstream names and session counts) so they know what's inside.
+3. **Tell the user.** Print the file path and the overview list. The overview contains workstream names with session counts — display these as a short list so the user knows what's in the file.
