@@ -49,7 +49,7 @@ def atomic_write(path: Path, content: str) -> None:
         os.write(fd, content.encode())
         os.close(fd)
         fd = -1  # Mark as closed so cleanup doesn't double-close
-        os.rename(tmp, path)
+        os.replace(tmp, path)
     except BaseException:
         if fd >= 0:
             os.close(fd)

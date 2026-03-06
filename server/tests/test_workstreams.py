@@ -1,7 +1,6 @@
 """Tests for workstreams module."""
 
 import json
-import tempfile
 from pathlib import Path
 
 from relay_server.workstreams import (
