@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.11.6] - 2026-03-12
+
+### Changed
+- **Skills → commands migration** — Moved `list`, `status`, `summarize`, `switch`, `new`, `backfill`, and `setup-relay` from skills to commands. These are user-initiated actions that don't benefit from auto-invocation. `save`, `park`, and `idea` remain as skills since Claude can proactively recognize when to use them.
+- **Updated README** — Natural language section reflects which operations are auto-invocable skills vs explicit commands. MCP tool descriptions updated for server-side markdown formatting.
+
 ## [0.11.5] - 2026-03-12
 
 ### Changed

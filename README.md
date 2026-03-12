@@ -175,16 +175,12 @@ claude --plugin-dir /path/to/relay
 
 ### Natural language
 
-The skills also respond to natural language:
-- "new workstream", "start workstream", "create workstream"
-- "switch to X", "resume workstream", "work on X"
+Some operations are skills that Claude can auto-invoke when it recognizes the intent:
 - "save state", "save workstream", "save session"
 - "park this", "park workstream", "pause workstream"
-- "list workstreams", "show workstreams"
-- "relay status", "workstream status", "what am I working on"
 - "add idea", "jot down", "remember this idea"
-- "summarize activity", "what did I work on", "standup summary", "brag book"
-- "backfill hints", "generate summaries", "backfill sessions"
+
+The remaining operations are commands — use the slash syntax above to invoke them.
 
 ### MCP tools
 
@@ -198,9 +194,9 @@ The MCP server provides tools that Claude uses directly during your session — 
 | `create_workstream` | Create a new workstream: add to registry, write initial state file |
 | `park_workstream` | Save state and set workstream status to parked |
 | `switch_workstream` | Save current workstream, activate target, write session marker, return target state |
-| `list_workstreams` | List all workstreams grouped by status (active, parked, completed) plus ideas |
+| `list_workstreams` | List all workstreams grouped by status (active, parked, completed) plus ideas. Returns pre-formatted markdown by default; pass `format="json"` for structured data |
 | `manage_idea` | Add, remove, or list ideas for future work |
-| `summarize_activity` | Summarize recent activity grouped by workstream — writes markdown to file, returns path + overview |
+| `summarize_activity` | Summarize recent activity grouped by workstream. Always writes markdown to file; returns full markdown inline (≤200 lines) or overview + file path (longer). Pass `format="json"` for structured data |
 
 **Conversation search:**
 

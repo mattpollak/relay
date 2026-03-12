@@ -1,8 +1,5 @@
 ---
-name: status
-description: >
-  Show current workstream status and available commands.
-  Trigger phrases: "relay status", "workstream status", "what workstream", "what am I working on".
+description: Show current workstream status and available commands.
 ---
 
 # Workstream Status

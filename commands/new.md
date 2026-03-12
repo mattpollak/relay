@@ -1,8 +1,5 @@
 ---
-name: new
-description: >
-  Create a new workstream for tracking a project or task.
-  Trigger phrases: "new workstream", "start workstream", "create workstream".
+description: Create a new workstream for tracking a project or task.
 argument-hint: "<name> [description]"
 ---
 

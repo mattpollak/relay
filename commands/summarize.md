@@ -1,8 +1,5 @@
 ---
-name: summarize
-description: >
-  Summarize recent activity grouped by workstream. Use for standup prep, brag books, or catching up after time away.
-  Trigger phrases: "summarize activity", "what did I work on", "standup summary", "brag book".
+description: Summarize recent activity grouped by workstream. Use for standup prep, brag books, or catching up after time away.
 argument-hint: "<time-range: 48h, 7d, since Monday, 2026-03-01>"
 ---
 

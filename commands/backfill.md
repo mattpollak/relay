@@ -1,8 +1,5 @@
 ---
-name: backfill
-description: >
-  Generate session hints for older sessions that don't have them. Interactive — Claude reads conversations and writes structured summaries.
-  Trigger phrases: "backfill hints", "generate summaries", "backfill sessions".
+description: Generate session hints for older sessions that don't have them. Interactive — Claude reads conversations and writes structured summaries.
 argument-hint: "<time-range: 7d, 30d, all>"
 ---
 

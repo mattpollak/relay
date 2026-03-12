@@ -1,8 +1,10 @@
+---
+description: Interactive setup for relay's optional features (terminal decoration, summary directory).
+---
+
 # Setup Relay
 
 Interactive setup for relay's optional features. Detects the user's environment and configures settings with confirmation at each step.
-
-Trigger phrases: "setup relay", "configure relay", "relay setup"
 
 ## Steps
 

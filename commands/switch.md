@@ -1,8 +1,5 @@
 ---
-name: switch
-description: >
-  Switch to a different workstream, saving the current one first.
-  Also handles "resume workstream", "load workstream", "work on <name>".
+description: Switch to a different workstream, saving the current one first.
 argument-hint: "<workstream-name>"
 ---
 

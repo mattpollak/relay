@@ -9,9 +9,9 @@ MCP server for Claude Code conversation history search and workstream management
 - **create_workstream** — Create a new workstream: add to registry, write initial state file
 - **park_workstream** — Save state and set workstream status to parked
 - **switch_workstream** — Save current workstream, activate target, write session marker, return target state
-- **list_workstreams** — List all workstreams grouped by status plus ideas
+- **list_workstreams** — List all workstreams grouped by status plus ideas. Returns pre-formatted markdown by default; pass `format="json"` for structured data.
 - **manage_idea** — Add, remove, or list ideas for future work
-- **summarize_activity** — Summarize recent activity grouped by workstream. Returns pre-formatted markdown.
+- **summarize_activity** — Summarize recent activity grouped by workstream. Always writes to file; returns full markdown inline (≤200 lines) or overview + file path. Pass `format="json"` for structured data.
 
 **Conversation search:**
 - **search_history** — Full-text search across all indexed conversations. Results include `session_number` within slug chains.
