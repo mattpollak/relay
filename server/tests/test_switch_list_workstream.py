@@ -150,3 +150,75 @@ def test_list_workstreams_empty():
         assert result_json["parked"] == []
         assert result_json["completed"] == []
         assert result_json["ideas"] == []
+
+
+def test_get_status_attached():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _, data_dir, conn = _setup(tmpdir)
+        # Write a richer state file for alpha
+        (data_dir / "workstreams" / "alpha" / "state.md").write_text(
+            "# alpha\n\n## Current Status\nWorking on feature X.\n\n## Next Steps\n1. Finish X\n2. Start Y\n"
+        )
+        try:
+            from relay_server.workstreams import get_status
+            result = get_status(data_dir=data_dir, attached="alpha")
+            assert isinstance(result, str)
+            assert "## Attached: alpha" in result
+            assert "**Description:** Alpha" in result
+            assert "**Project:** /alpha" in result
+            assert "### Current Status" in result
+            assert "Working on feature X" in result
+            assert "### Next Steps" in result
+            assert "Finish X" in result
+            # beta should be in "other" parked
+            assert "beta" in result
+            assert "**Parked:**" in result
+            assert "**Commands:**" in result
+        finally:
+            conn.close()
+
+
+def test_get_status_no_attached():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _, data_dir, conn = _setup(tmpdir)
+        try:
+            from relay_server.workstreams import get_status
+            result = get_status(data_dir=data_dir)
+            assert "No workstream attached" in result
+            assert "alpha" in result  # should appear in other active
+            assert "**Commands:**" in result
+        finally:
+            conn.close()
+
+
+def test_get_status_json():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _, data_dir, conn = _setup(tmpdir)
+        (data_dir / "workstreams" / "alpha" / "state.md").write_text(
+            "# alpha\n\n## Current Status\nWorking on X.\n\n## Next Steps\n1. Finish X\n"
+        )
+        try:
+            from relay_server.workstreams import get_status
+            result = get_status(data_dir=data_dir, attached="alpha", format="json")
+            assert isinstance(result, dict)
+            assert result["attached"]["name"] == "alpha"
+            assert result["attached"]["description"] == "Alpha"
+            assert "Working on X" in result["attached"]["current_status"]
+            assert "Finish X" in result["attached"]["next_steps"]
+            assert "beta" in result["others"]["parked"]
+            assert "alpha" not in result["others"]["active"]
+        finally:
+            conn.close()
+
+
+def test_get_status_excludes_attached_from_other():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _, data_dir, conn = _setup(tmpdir)
+        try:
+            from relay_server.workstreams import get_status
+            result = get_status(data_dir=data_dir, attached="alpha")
+            # alpha should NOT appear in the "Other active" line
+            other_active_line = [l for l in result.split("\n") if "**Other active:**" in l][0]
+            assert "alpha" not in other_active_line
+        finally:
+            conn.close()

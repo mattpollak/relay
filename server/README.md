@@ -5,6 +5,7 @@ MCP server for Claude Code conversation history search and workstream management
 ## Tools
 
 **Workstream management:**
+- **get_status** — Get current session status as pre-formatted markdown: attached workstream details (from state file), other workstreams, and commands.
 - **save_workstream** — Atomically save state file (with backup), update registry, write session hint + marker to DB
 - **create_workstream** — Create a new workstream: add to registry, write initial state file
 - **park_workstream** — Save state and set workstream status to parked

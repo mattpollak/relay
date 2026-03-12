@@ -455,3 +455,101 @@ def list_workstreams(*, data_dir: Path, format: str = "markdown") -> dict | str:
     )
 
     return "\n".join(lines)
+
+
+def get_status(
+    *, data_dir: Path, attached: str | None = None, format: str = "markdown",
+) -> dict | str:
+    """Build a status view for the current session.
+
+    Args:
+        attached: Name of the attached workstream (if any).
+        format: "markdown" (default) returns pre-formatted markdown string.
+                "json" returns structured dict.
+    """
+    registry = read_registry(data_dir)
+    workstreams = registry.get("workstreams", {})
+
+    # Build attached workstream data
+    attached_data = None
+    if attached and attached in workstreams:
+        ws = workstreams[attached]
+        attached_data = {
+            "name": attached,
+            "description": ws.get("description", ""),
+            "project_dir": ws.get("project_dir", ""),
+            "last_touched": ws.get("last_touched", ""),
+            "current_status": None,
+            "next_steps": None,
+        }
+        state_path = data_dir / "workstreams" / attached / "state.md"
+        if state_path.exists():
+            state = state_path.read_text()
+            attached_data["current_status"] = _extract_section(state, "Current Status")
+            attached_data["next_steps"] = _extract_section(state, "Next Steps")
+
+    # Build other workstreams grouped by status
+    others: dict[str, list[str]] = {"active": [], "parked": [], "completed": []}
+    for name, ws in workstreams.items():
+        if name == attached:
+            continue
+        status = ws.get("status", "parked")
+        bucket = others.get(status, others["parked"])
+        bucket.append(name)
+
+    if format == "json":
+        return {
+            "attached": attached_data,
+            "others": others,
+        }
+
+    # Build markdown
+    lines = []
+    if attached_data:
+        lines.append(f"## Attached: {attached}")
+        lines.append(f"**Description:** {attached_data['description']}")
+        lines.append(f"**Project:** {attached_data['project_dir'] or 'none'}")
+        lines.append(f"**Last touched:** {attached_data['last_touched']}")
+        lines.append("")
+        if attached_data["current_status"]:
+            lines.append("### Current Status")
+            lines.append(attached_data["current_status"])
+            lines.append("")
+        if attached_data["next_steps"]:
+            lines.append("### Next Steps")
+            lines.append(attached_data["next_steps"])
+            lines.append("")
+    elif attached:
+        lines.append(f"No workstream '{attached}' found in registry.")
+        lines.append("")
+    else:
+        lines.append("No workstream attached to this session.")
+        lines.append("")
+
+    lines.append(f"**Other active:** {', '.join(others['active']) or 'none'}")
+    lines.append(f"**Parked:** {', '.join(others['parked']) or 'none'}")
+    lines.append(f"**Completed:** {', '.join(others['completed']) or 'none'}")
+    lines.append("")
+    lines.append(
+        "**Commands:** `/relay:new` · `/relay:switch <name>` "
+        "· `/relay:save` · `/relay:park` · `/relay:list`"
+    )
+
+    return "\n".join(lines)
+
+
+def _extract_section(markdown: str, heading: str) -> str | None:
+    """Extract content under a ## heading from markdown, stopping at the next heading."""
+    lines = markdown.split("\n")
+    capturing = False
+    content: list[str] = []
+    for line in lines:
+        if line.startswith("## ") and heading in line:
+            capturing = True
+            continue
+        if capturing:
+            if line.startswith("## "):
+                break
+            content.append(line)
+    text = "\n".join(content).strip()
+    return text if text else None

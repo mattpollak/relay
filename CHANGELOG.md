@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.0] - 2026-03-12
+
+### Added
+- **`get_status` MCP tool** — Returns pre-formatted markdown for the status command. Takes the attached workstream name, reads its state file, builds a complete status view with current status, next steps, other workstreams, and commands. Eliminates LLM formatting overhead for `/relay:status`.
+
+### Changed
+- **`/relay:status` command** — Now calls `get_status` and displays the result directly instead of manually assembling the display from JSON data and session context.
+
 ## [0.11.6] - 2026-03-12
 
 ### Changed

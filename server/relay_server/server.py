@@ -1278,6 +1278,27 @@ def switch_workstream(
 
 
 @mcp.tool()
+def get_status(
+    ctx: Context[ServerSession, AppContext],
+    attached: str | None = None,
+    format: str = "markdown",
+) -> dict | str:
+    """Get the current session's workstream status.
+
+    Returns pre-formatted markdown by default with the attached workstream's details
+    (description, project, current status, next steps from state file), other
+    workstreams summary, and available commands. Pass format="json" for structured data.
+
+    Args:
+        attached: Name of the attached workstream (from session context). Omit if none.
+        format: "markdown" (default) or "json" for structured data.
+    """
+    from .workstreams import get_data_dir
+    from .workstreams import get_status as _get_status
+    return _get_status(data_dir=get_data_dir(), attached=attached, format=format)
+
+
+@mcp.tool()
 def list_workstreams(
     ctx: Context[ServerSession, AppContext],
     format: str = "markdown",

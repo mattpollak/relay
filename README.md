@@ -190,6 +190,7 @@ The MCP server provides tools that Claude uses directly during your session — 
 
 | Tool | What it does |
 |---|---|
+| `get_status` | Get current session status as pre-formatted markdown — attached workstream details, other workstreams, and commands |
 | `save_workstream` | Atomically save state file (with backup), update registry, write session hint + marker to DB — all in one call |
 | `create_workstream` | Create a new workstream: add to registry, write initial state file |
 | `park_workstream` | Save state and set workstream status to parked |
