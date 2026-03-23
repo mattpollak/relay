@@ -1368,6 +1368,25 @@ def manage_idea(
 
 
 @mcp.tool()
+def manage_worktree(
+    action: str,
+    ctx: Context[ServerSession, AppContext],
+    name: str | None = None,
+    path: str | None = None,
+) -> dict:
+    """Manage git worktree associations for workstreams.
+
+    Args:
+        action: "list", "attach", "detach", or "remove"
+        name: Workstream name (required for attach/detach/remove)
+        path: Absolute path to worktree (required for attach)
+    """
+    from .workstreams import get_data_dir
+    from .workstreams import manage_worktree as _manage
+    return _manage(data_dir=get_data_dir(), action=action, name=name, path=path)
+
+
+@mcp.tool()
 def reindex(ctx: Context[ServerSession, AppContext]) -> dict:
     """Force a complete re-index of all conversation transcripts.
 

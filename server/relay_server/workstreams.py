@@ -572,6 +572,95 @@ def manage_idea(
     return {"status": "error", "message": f"Unknown action: {action}"}
 
 
+def manage_worktree(
+    *,
+    data_dir: Path,
+    action: str,
+    name: str | None = None,
+    path: str | None = None,
+) -> dict:
+    """Manage git worktree associations for workstreams."""
+    if action == "list":
+        registry = read_registry(data_dir)
+        worktrees = []
+        for ws_name, ws in registry.get("workstreams", {}).items():
+            git = ws.get("git")
+            if git and git.get("strategy") == "worktree":
+                wt_path = git.get("worktree_path", "")
+                worktrees.append({
+                    "workstream": ws_name,
+                    "worktree_path": wt_path,
+                    "branch": git.get("branch", ""),
+                    "exists": Path(wt_path).exists() if wt_path else False,
+                })
+        return {"status": "ok", "worktrees": worktrees}
+
+    if action == "attach":
+        if not name:
+            return {"status": "error", "message": "name is required for attach"}
+        if not path:
+            return {"status": "error", "message": "path is required for attach"}
+        registry = read_registry(data_dir)
+        workstreams = registry.get("workstreams", {})
+        if name not in workstreams:
+            return {"status": "error", "message": f"Workstream '{name}' not found"}
+        wt_path = Path(path)
+        if not wt_path.exists() or not wt_path.is_dir():
+            return {"status": "error", "message": f"Path does not exist or is not a directory: {path}"}
+        from .git_ops import get_worktree_branch
+        branch = get_worktree_branch(wt_path)
+        if not branch:
+            return {"status": "error", "message": f"Could not detect branch at {path}"}
+        entry = workstreams[name]
+        entry["git"] = {
+            **(entry.get("git") or {}),
+            "strategy": "worktree",
+            "branch": branch,
+            "worktree_path": str(path),
+        }
+        write_registry_entry(data_dir, name, entry)
+        return {"status": "attached", "workstream": name, "worktree_path": str(path), "branch": branch}
+
+    if action == "detach":
+        if not name:
+            return {"status": "error", "message": "name is required for detach"}
+        registry = read_registry(data_dir)
+        workstreams = registry.get("workstreams", {})
+        if name not in workstreams:
+            return {"status": "error", "message": f"Workstream '{name}' not found"}
+        entry = workstreams[name]
+        git = entry.get("git") or {}
+        branch = git.get("branch", "")
+        entry["git"] = {"strategy": "branch", "branch": branch}
+        write_registry_entry(data_dir, name, entry)
+        return {"status": "detached", "workstream": name, "branch": branch}
+
+    if action == "remove":
+        if not name:
+            return {"status": "error", "message": "name is required for remove"}
+        registry = read_registry(data_dir)
+        workstreams = registry.get("workstreams", {})
+        if name not in workstreams:
+            return {"status": "error", "message": f"Workstream '{name}' not found"}
+        entry = workstreams[name]
+        git = entry.get("git") or {}
+        wt_path_str = git.get("worktree_path")
+        project_dir = entry.get("project_dir", "")
+        if not wt_path_str:
+            return {"status": "error", "message": "No worktree_path set for this workstream"}
+        if not project_dir:
+            return {"status": "error", "message": "No project_dir set for this workstream"}
+        from .git_ops import remove_worktree
+        result = remove_worktree(Path(project_dir), Path(wt_path_str))
+        if result.get("status") == "error":
+            return result
+        entry.pop("git", None)
+        write_registry_entry(data_dir, name, entry)
+        return {"status": "removed", "workstream": name}
+
+    return {"status": "error", "message": f"Unknown action: {action}"}
+
+
 def list_workstreams(*, data_dir: Path, format: str = "markdown") -> dict | str:
     """List all workstreams grouped by status, plus ideas.
 
