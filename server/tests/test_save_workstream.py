@@ -208,3 +208,67 @@ def test_save_no_existing_state_no_backup():
             assert not (data_dir / "workstreams" / "test-ws" / "state.md.bak").exists()
         finally:
             conn.close()
+
+
+def test_save_stores_stash_ref():
+    """save_workstream stores stash_ref in registry git block."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path, data_dir, conn = _setup(tmpdir)
+        try:
+            # Add a git block to the test workstream's registry entry
+            registry = json.loads((data_dir / "workstreams.json").read_text())
+            registry["workstreams"]["test-ws"]["git"] = {"strategy": "branch", "branch": "main"}
+            (data_dir / "workstreams.json").write_text(json.dumps(registry))
+
+            from relay_server.workstreams import save_workstream
+            result = save_workstream(
+                data_dir=data_dir,
+                conn=conn,
+                name="test-ws",
+                state_content="# State",
+                stash_ref="abc123def456",
+            )
+            assert result["status"] == "saved"
+
+            reg = read_registry(data_dir)
+            git = reg["workstreams"]["test-ws"]["git"]
+            assert git["stash_ref"] == "abc123def456"
+            assert "stash_message" in git
+        finally:
+            conn.close()
+
+
+def test_save_clear_stash():
+    """save_workstream with clear_stash=True removes stash_ref from registry."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path, data_dir, conn = _setup(tmpdir)
+        try:
+            # Pre-populate git block with stash info
+            registry = json.loads((data_dir / "workstreams.json").read_text())
+            registry["workstreams"]["test-ws"]["git"] = {
+                "strategy": "branch",
+                "branch": "main",
+                "stash_ref": "oldstashref",
+                "stash_message": "relay: test-ws at 2026-01-01T00:00:00Z",
+            }
+            (data_dir / "workstreams.json").write_text(json.dumps(registry))
+
+            from relay_server.workstreams import save_workstream
+            result = save_workstream(
+                data_dir=data_dir,
+                conn=conn,
+                name="test-ws",
+                state_content="# State",
+                clear_stash=True,
+            )
+            assert result["status"] == "saved"
+
+            reg = read_registry(data_dir)
+            git = reg["workstreams"]["test-ws"]["git"]
+            assert "stash_ref" not in git
+            assert "stash_message" not in git
+            # git block itself still exists with strategy/branch preserved
+            assert git["strategy"] == "branch"
+            assert git["branch"] == "main"
+        finally:
+            conn.close()

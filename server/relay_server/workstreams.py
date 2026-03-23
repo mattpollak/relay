@@ -166,6 +166,9 @@ def park_workstream(
     session_id: str | None = None,
     hint_summary: list[str] | None = None,
     hint_decisions: list[str] | None = None,
+    stash_ref: str | None = None,
+    clear_stash: bool = False,
+    remove_worktree: bool = False,
 ) -> dict:
     """Save state then set workstream status to parked."""
     registry = read_registry(data_dir)
@@ -181,6 +184,8 @@ def park_workstream(
         session_id=session_id,
         hint_summary=hint_summary,
         hint_decisions=hint_decisions,
+        stash_ref=stash_ref,
+        clear_stash=clear_stash,
     )
 
     # Set status to parked
@@ -188,11 +193,33 @@ def park_workstream(
     registry["workstreams"][name]["status"] = "parked"
     atomic_write(data_dir / "workstreams.json", json.dumps(registry, indent=2) + "\n")
 
-    return {
+    result = {
         "status": "parked",
         "workstream": name,
         **{k: v for k, v in save_result.items() if k != "status"},
     }
+
+    if remove_worktree:
+        registry = read_registry(data_dir)
+        git = registry["workstreams"].get(name, {}).get("git")
+        if git and git.get("strategy") == "worktree" and git.get("worktree_path"):
+            from .git_ops import remove_worktree as _remove_wt
+            wt_result = _remove_wt(
+                Path(registry["workstreams"][name]["project_dir"]),
+                Path(git["worktree_path"]),
+            )
+            if wt_result["status"] == "error":
+                result["worktree_warning"] = wt_result["message"]
+            else:
+                git.pop("worktree_path", None)
+                git["strategy"] = "branch"  # downgrade
+                atomic_write(
+                    data_dir / "workstreams.json",
+                    json.dumps(registry, indent=2) + "\n",
+                )
+                result["worktree_removed"] = True
+
+    return result
 
 
 def save_workstream(
@@ -204,6 +231,8 @@ def save_workstream(
     session_id: str | None = None,
     hint_summary: list[str] | None = None,
     hint_decisions: list[str] | None = None,
+    stash_ref: str | None = None,
+    clear_stash: bool = False,
 ) -> dict:
     """Save workstream state atomically.
 
@@ -268,6 +297,25 @@ def save_workstream(
                VALUES (?, ?, ?)""",
             (session_id, name, utc_timestamp()),
         )
+
+    # Manage stash ref in registry
+    if stash_ref or clear_stash:
+        registry = read_registry(data_dir)
+        if name in registry["workstreams"]:
+            entry = registry["workstreams"][name]
+            git = entry.get("git")
+            if git:
+                if clear_stash:
+                    git.pop("stash_ref", None)
+                    git.pop("stash_message", None)
+                elif stash_ref:
+                    git["stash_ref"] = stash_ref
+                    git["stash_message"] = f"relay: {name} at {utc_timestamp()}"
+                entry["git"] = git
+                atomic_write(
+                    data_dir / "workstreams.json",
+                    json.dumps(registry, indent=2) + "\n",
+                )
 
     conn.commit()
 

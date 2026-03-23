@@ -1131,6 +1131,8 @@ def save_workstream(
     session_id: str | None = None,
     hint_summary: list[str] | None = None,
     hint_decisions: list[str] | None = None,
+    stash_ref: str | None = None,
+    clear_stash: bool = False,
 ) -> dict:
     """Save workstream state to disk and write session hint.
 
@@ -1143,6 +1145,8 @@ def save_workstream(
         session_id: Current session UUID (from relay-session-id context). If omitted, no hint is written.
         hint_summary: 3-6 bullets describing what was accomplished this session
         hint_decisions: Key decisions made (omit if none)
+        stash_ref: Git stash SHA to store on this workstream's git block (if stashing)
+        clear_stash: If True, remove stash_ref and stash_message from registry git block
     """
     from .workstreams import get_data_dir
     from .workstreams import save_workstream as _save
@@ -1158,6 +1162,8 @@ def save_workstream(
             session_id=session_id,
             hint_summary=hint_summary,
             hint_decisions=hint_decisions,
+            stash_ref=stash_ref,
+            clear_stash=clear_stash,
         )
     finally:
         conn.close()
@@ -1235,6 +1241,9 @@ def park_workstream(
     session_id: str | None = None,
     hint_summary: list[str] | None = None,
     hint_decisions: list[str] | None = None,
+    stash_ref: str | None = None,
+    clear_stash: bool = False,
+    remove_worktree: bool = False,
 ) -> dict:
     """Save workstream state and set status to parked.
 
@@ -1244,6 +1253,9 @@ def park_workstream(
         session_id: Current session UUID (from relay-session-id context)
         hint_summary: 3-6 bullets describing what was accomplished
         hint_decisions: Key decisions made (omit if none)
+        stash_ref: Git stash SHA to store on this workstream's git block (if stashing)
+        clear_stash: If True, remove stash_ref and stash_message from registry git block
+        remove_worktree: If True, remove the worktree after parking (only for worktree strategy)
     """
     from .workstreams import get_data_dir
     from .workstreams import park_workstream as _park
@@ -1254,6 +1266,7 @@ def park_workstream(
         return _park(
             data_dir=get_data_dir(), conn=conn, name=name, state_content=state_content,
             session_id=session_id, hint_summary=hint_summary, hint_decisions=hint_decisions,
+            stash_ref=stash_ref, clear_stash=clear_stash, remove_worktree=remove_worktree,
         )
     finally:
         conn.close()

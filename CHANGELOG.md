@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.2] - 2026-03-22
+
+### Added
+- **Stash tracking in `save_workstream`** — New `stash_ref` and `clear_stash` params let save (and park) record or clear a git stash SHA in the workstream's registry git block, with an auto-generated `stash_message` timestamp.
+- **Worktree removal in `park_workstream`** — New `remove_worktree` param removes the worktree after parking (refuses if dirty), downgrades registry git strategy to "branch", and returns `worktree_removed: true` or `worktree_warning` on failure.
+
 ## [0.12.1] - 2026-03-22
 
 ### Fixed

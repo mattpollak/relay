@@ -254,3 +254,114 @@ def test_update_removes_git_strategy():
         assert result["status"] == "updated"
         reg = read_registry(data_dir)
         assert reg["workstreams"]["test-ws"].get("git") is None
+
+
+def test_park_with_remove_worktree():
+    """park_workstream with remove_worktree=True removes the worktree."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        import subprocess
+        db_path, data_dir, conn = _setup(tmpdir)
+
+        # Create a git repo
+        repo = Path(tmpdir) / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", str(repo)], capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t.com"], capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "T"], capture_output=True)
+        (repo / "f.txt").write_text("x")
+        subprocess.run(["git", "-C", str(repo), "add", "."], capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"], capture_output=True)
+
+        # Create a worktree
+        wt_path = Path(tmpdir) / "worktree"
+        subprocess.run(
+            ["git", "-C", str(repo), "worktree", "add", "-b", "feat/wt", str(wt_path)],
+            capture_output=True,
+        )
+        assert wt_path.exists()
+
+        try:
+            from relay_server.workstreams import create_workstream, park_workstream
+            # Create workstream with worktree strategy pointing to that worktree
+            create_workstream(
+                data_dir=data_dir,
+                name="wt-ws",
+                description="Worktree workstream",
+                project_dir=str(repo),
+                git_strategy="worktree",
+                git_branch="feat/wt",
+                worktree_path=str(wt_path),
+            )
+
+            result = park_workstream(
+                data_dir=data_dir,
+                conn=conn,
+                name="wt-ws",
+                state_content="# Parked",
+                remove_worktree=True,
+            )
+
+            assert result["status"] == "parked"
+            assert result.get("worktree_removed") is True
+            assert not wt_path.exists()
+
+            reg = read_registry(data_dir)
+            git = reg["workstreams"]["wt-ws"]["git"]
+            assert git["strategy"] == "branch"
+            assert "worktree_path" not in git
+        finally:
+            conn.close()
+
+
+def test_park_with_remove_worktree_dirty():
+    """park_workstream with remove_worktree=True refuses if worktree is dirty."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        import subprocess
+        db_path, data_dir, conn = _setup(tmpdir)
+
+        # Create a git repo
+        repo = Path(tmpdir) / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", str(repo)], capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t.com"], capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "T"], capture_output=True)
+        (repo / "f.txt").write_text("x")
+        subprocess.run(["git", "-C", str(repo), "add", "."], capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"], capture_output=True)
+
+        # Create a worktree
+        wt_path = Path(tmpdir) / "worktree"
+        subprocess.run(
+            ["git", "-C", str(repo), "worktree", "add", "-b", "feat/dirty", str(wt_path)],
+            capture_output=True,
+        )
+        assert wt_path.exists()
+
+        # Add an uncommitted file to the worktree (make it dirty)
+        (wt_path / "dirty.txt").write_text("uncommitted")
+
+        try:
+            from relay_server.workstreams import create_workstream, park_workstream
+            create_workstream(
+                data_dir=data_dir,
+                name="dirty-ws",
+                description="Dirty worktree workstream",
+                project_dir=str(repo),
+                git_strategy="worktree",
+                git_branch="feat/dirty",
+                worktree_path=str(wt_path),
+            )
+
+            result = park_workstream(
+                data_dir=data_dir,
+                conn=conn,
+                name="dirty-ws",
+                state_content="# Parked",
+                remove_worktree=True,
+            )
+
+            assert result["status"] == "parked"
+            assert "worktree_warning" in result
+            assert wt_path.exists()
+        finally:
+            conn.close()
