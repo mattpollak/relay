@@ -1,6 +1,6 @@
 {
   "name": "relay",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Workstream management, context persistence, and session history search for Claude Code",
   "author": { "name": "Matt Pollak" },
   "repository": "https://github.com/mattpollak/relay",

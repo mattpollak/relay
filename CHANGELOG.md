@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.14.0] - 2026-03-22
+
+### Added
+- **`write_session_hint` MCP tool** — Writes session hints directly to the database, replacing bash file I/O for backfill operations.
+
+### Changed
+- **Hooks reduced from 5 to 3** — Removed PostToolUse (context-monitor) and PreToolUse (approve-scripts) hooks, eliminating per-tool-call overhead. PreCompact hook handles save reminders.
+- **Backfill command** — Now uses `write_session_hint` MCP tool instead of bash scripts. Zero bash permission prompts.
+- **Session-start hook** — Simplified: marker writing inlined, multi-workstream case uses `switch_workstream` MCP tool instead of bash script.
+- **Pre-compact hook** — Slimmed from 56 to 33 lines. Claude already knows how to call `save_workstream`.
+- **Skill descriptions** — Updated to third person per Anthropic best practices.
+- **MCP server instructions** — Updated to reflect full scope (not just search).
+
+### Removed
+- **`context-monitor.sh`** — Tool-call counter was a noisy proxy; PreCompact hook is the correct trigger.
+- **`approve-scripts.sh`** — No commands invoke bash scripts anymore, making auto-approval unnecessary.
+- **`attach-workstream.sh`** — Logic inlined into session-start.sh.
+- **`write-data-file.sh` / `read-data-file.sh`** — Replaced by MCP tools.
+- **6 legacy registry scripts** — Already replaced by MCP tools in v0.11.
+
 ## [0.13.0] - 2026-03-22
 
 ### Added
