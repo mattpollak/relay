@@ -375,3 +375,156 @@ def test_switch_stale_stash_cleared():
             assert "stash_ref" not in reg["workstreams"]["target"]["git"]
         finally:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Display tests: list_workstreams git info
+# ---------------------------------------------------------------------------
+
+def test_list_workstreams_shows_branch():
+    """list_workstreams appends (branch-name) for branch-strategy workstreams."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir) / "data"
+        data_dir.mkdir()
+        registry = {
+            "version": 1,
+            "workstreams": {
+                "payments": {
+                    "status": "active",
+                    "description": "Payments feature",
+                    "created": "2026-01-01",
+                    "last_touched": "2026-01-01",
+                    "project_dir": "/myapp",
+                    "git": {"strategy": "branch", "branch": "feat/test"},
+                }
+            }
+        }
+        (data_dir / "workstreams.json").write_text(json.dumps(registry))
+        from relay_server.workstreams import list_workstreams
+        result = list_workstreams(data_dir=data_dir)
+        assert isinstance(result, str)
+        assert "(feat/test)" in result
+
+
+def test_list_workstreams_shows_worktree():
+    """list_workstreams appends (worktree: path) for worktree-strategy workstreams."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir) / "data"
+        data_dir.mkdir()
+        registry = {
+            "version": 1,
+            "workstreams": {
+                "infra": {
+                    "status": "active",
+                    "description": "Infra work",
+                    "created": "2026-01-01",
+                    "last_touched": "2026-01-01",
+                    "project_dir": "/myapp",
+                    "git": {
+                        "strategy": "worktree",
+                        "branch": "feat/infra",
+                        "worktree_path": "/some/path",
+                    },
+                }
+            }
+        }
+        (data_dir / "workstreams.json").write_text(json.dumps(registry))
+        from relay_server.workstreams import list_workstreams
+        result = list_workstreams(data_dir=data_dir)
+        assert isinstance(result, str)
+        assert "(worktree:" in result
+        assert "/some/path" in result
+
+
+def test_list_no_git_unchanged():
+    """list_workstreams does not append git info when no git config is present."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir) / "data"
+        data_dir.mkdir()
+        registry = {
+            "version": 1,
+            "workstreams": {
+                "plain": {
+                    "status": "active",
+                    "description": "Plain workstream",
+                    "created": "2026-01-01",
+                    "last_touched": "2026-01-01",
+                    "project_dir": "",
+                }
+            }
+        }
+        (data_dir / "workstreams.json").write_text(json.dumps(registry))
+        from relay_server.workstreams import list_workstreams
+        result = list_workstreams(data_dir=data_dir)
+        assert isinstance(result, str)
+        # No parenthetical git info should appear in description column
+        assert "(feat/" not in result
+        assert "(worktree:" not in result
+
+
+# ---------------------------------------------------------------------------
+# Display tests: get_status git section
+# ---------------------------------------------------------------------------
+
+def test_get_status_git_section():
+    """get_status includes a ## Git section when attached workstream has git config."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir) / "data"
+        data_dir.mkdir()
+        registry = {
+            "version": 1,
+            "workstreams": {
+                "myws": {
+                    "status": "active",
+                    "description": "My workstream",
+                    "created": "2026-01-01",
+                    "last_touched": "2026-01-01",
+                    "project_dir": "",
+                    "git": {"strategy": "branch", "branch": "feat/payments-api"},
+                }
+            }
+        }
+        (data_dir / "workstreams.json").write_text(json.dumps(registry))
+        ws_dir = data_dir / "workstreams" / "myws"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "state.md").write_text("# myws\n\n## Current Status\nIn progress.\n")
+        from relay_server.workstreams import get_status
+        result = get_status(data_dir=data_dir, attached="myws")
+        assert isinstance(result, str)
+        assert "## Git" in result
+        assert "branch" in result
+        assert "feat/payments-api" in result
+
+
+def test_get_status_shows_stash():
+    """get_status shows stashed changes info when stash_ref is set."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir) / "data"
+        data_dir.mkdir()
+        registry = {
+            "version": 1,
+            "workstreams": {
+                "myws": {
+                    "status": "active",
+                    "description": "My workstream",
+                    "created": "2026-01-01",
+                    "last_touched": "2026-01-01",
+                    "project_dir": "",
+                    "git": {
+                        "strategy": "branch",
+                        "branch": "feat/payments-api",
+                        "stash_ref": "a1b2c3d4e5f6",
+                        "stash_message": "relay: myws at 2026-03-22T10:00:00Z",
+                    },
+                }
+            }
+        }
+        (data_dir / "workstreams.json").write_text(json.dumps(registry))
+        ws_dir = data_dir / "workstreams" / "myws"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "state.md").write_text("# myws\n\n## Current Status\nIn progress.\n")
+        from relay_server.workstreams import get_status
+        result = get_status(data_dir=data_dir, attached="myws")
+        assert isinstance(result, str)
+        assert "Stashed changes" in result
+        assert "a1b2c3d" in result

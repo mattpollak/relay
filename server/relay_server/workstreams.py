@@ -679,6 +679,7 @@ def list_workstreams(*, data_dir: Path, format: str = "markdown") -> dict | str:
             "description": ws.get("description", ""),
             "last_touched": ws.get("last_touched", ""),
             "project_dir": ws.get("project_dir", ""),
+            "git": ws.get("git"),
         })
 
     # Read ideas
@@ -703,7 +704,23 @@ def list_workstreams(*, data_dir: Path, format: str = "markdown") -> dict | str:
         lines.append("| Workstream | Description | Last Touched |")
         lines.append("|---|---|---|")
         for ws in items:
-            lines.append(f"| {ws['name']} | {ws['description']} | {ws['last_touched']} |")
+            desc = ws['description']
+            git = ws.get("git")
+            if git:
+                strategy = git.get("strategy")
+                if strategy == "branch":
+                    branch = git.get("branch", "")
+                    if branch:
+                        desc = f"{desc} ({branch})"
+                elif strategy == "worktree":
+                    wt_path = git.get("worktree_path", "")
+                    if wt_path:
+                        # Shorten home dir paths with ~
+                        home = os.path.expanduser("~")
+                        if wt_path.startswith(home):
+                            wt_path = "~" + wt_path[len(home):]
+                        desc = f"{desc} (worktree: {wt_path})"
+            lines.append(f"| {ws['name']} | {desc} | {ws['last_touched']} |")
         lines.append("")
 
     if ideas:
@@ -748,6 +765,7 @@ def get_status(
             "last_touched": ws.get("last_touched", ""),
             "current_status": None,
             "next_steps": None,
+            "git": ws.get("git"),
         }
         state_path = data_dir / "workstreams" / attached / "state.md"
         if state_path.exists():
@@ -785,6 +803,43 @@ def get_status(
         if attached_data["next_steps"]:
             lines.append("### Next Steps")
             lines.append(attached_data["next_steps"])
+            lines.append("")
+        # Git section
+        git = attached_data.get("git")
+        if git:
+            strategy = git.get("strategy", "")
+            branch = git.get("branch", "")
+            lines.append("## Git")
+            lines.append(f"- **Strategy:** {strategy}")
+            if branch:
+                lines.append(f"- **Branch:** {branch}")
+            # Check current branch if project_dir is a real git repo
+            project_dir = attached_data.get("project_dir", "")
+            if project_dir and strategy == "branch" and branch:
+                try:
+                    from .git_ops import get_current_branch
+                    current_branch = get_current_branch(Path(project_dir))
+                    if current_branch:
+                        if current_branch == branch:
+                            lines.append(f"- **Current branch:** {current_branch} \u2713")
+                        else:
+                            lines.append(
+                                f"- **Current branch:** {current_branch} \u26a0\ufe0f (expected {branch})"
+                            )
+                except Exception:
+                    pass
+            stash_ref = git.get("stash_ref")
+            if stash_ref:
+                stash_date = ""
+                stash_msg = git.get("stash_message", "")
+                # Try to extract date from stash message (e.g. "relay: name at 2026-03-22T...")
+                if "at " in stash_msg:
+                    ts_part = stash_msg.split("at ")[-1]
+                    stash_date = ts_part[:10]  # YYYY-MM-DD
+                stash_line = f"- **Stashed changes:** {stash_ref[:7]}"
+                if stash_date:
+                    stash_line += f" (from {stash_date})"
+                lines.append(stash_line)
             lines.append("")
     elif attached:
         lines.append(f"No workstream '{attached}' found in registry.")
