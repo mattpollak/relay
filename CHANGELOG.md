@@ -1,15 +1,21 @@
 # Changelog
 
-## [0.12.3] - 2026-03-22
-
-### Changed
-- **Statusline git awareness** — Branch display in the statusline (and terminal title) now shows a mismatch indicator (`current ≠ expected`) when the active branch differs from the workstream's configured git branch, and a stash indicator (📦) when a stash ref is recorded in the workstream registry.
-
-## [0.12.2] - 2026-03-22
+## [0.13.0] - 2026-03-22
 
 ### Added
-- **Stash tracking in `save_workstream`** — New `stash_ref` and `clear_stash` params let save (and park) record or clear a git stash SHA in the workstream's registry git block, with an auto-generated `stash_message` timestamp.
-- **Worktree removal in `park_workstream`** — New `remove_worktree` param removes the worktree after parking (refuses if dirty), downgrades registry git strategy to "branch", and returns `worktree_removed: true` or `worktree_warning` on failure.
+- **Git strategy support** — Per-workstream git integration with three strategies: none (default), branch (tracking + warnings), worktree (full lifecycle management). Set via `create_workstream` or `update_workstream` with `git_strategy`, `git_branch`, and `worktree_path` params.
+- **`manage_worktree` MCP tool** — Attach, detach, remove, and list relay-managed worktrees. Follows the `manage_idea` action-based pattern.
+- **Stash tracking** — `save_workstream` and `switch_workstream` accept `stash_ref` param to track git stash SHAs. Reminders on switch-to, silent cleanup of stale refs. `clear_stash` param to clear after apply.
+- **Statusline indicators** — Branch mismatch (`main ≠ feat/x`) and stash (📦) indicators in terminal decoration.
+
+### Changed
+- **`switch_workstream`** — Returns `git_warning`, `git_suggestion`, `dirty_warning`, `worktree_path`, and `stash_reminder` fields based on target workstream's git config.
+- **`park_workstream`** — New `remove_worktree` param to clean up worktree on park (refuses if dirty, downgrades to branch strategy).
+- **`get_status`** — Shows git section with strategy, branch, current branch check, and stash info.
+- **`list_workstreams`** — Shows branch/worktree info inline per workstream.
+- **`/relay:new` command** — Offers git strategy setup after workstream creation.
+- **`/relay:switch` command** — Surfaces git warnings and stash reminders.
+- **`/relay:park` skill** — Offers worktree cleanup option.
 
 ## [0.12.1] - 2026-03-22
 

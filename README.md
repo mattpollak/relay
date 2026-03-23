@@ -101,6 +101,7 @@ relay bridges the gap between the ephemeral context window and persistent workst
 - **Auto-tagging** — messages classified by type (UX reviews, architecture decisions, plans, debugging) for easy filtering
 - **Activity summaries** — `/relay:summarize 7d` for standup prep, brag books, or catching up after time away
 - **Idea capture** — `/relay:idea` to jot down future work without losing your flow
+- **Git integration** — optional per-workstream branch tracking, worktree management, and stash tracking with statusline indicators
 
 ## Prerequisites
 
@@ -192,10 +193,11 @@ The MCP server provides tools that Claude uses directly during your session — 
 |---|---|
 | `get_status` | Get current session status as pre-formatted markdown — attached workstream details, other workstreams, and commands |
 | `save_workstream` | Atomically save state file (with backup), update registry, write session hint + marker to DB — all in one call |
-| `create_workstream` | Create a new workstream: add to registry, write initial state file |
-| `park_workstream` | Save state and set workstream status to parked |
-| `switch_workstream` | Save current workstream, activate target, write session marker, return target state |
-| `list_workstreams` | List all workstreams grouped by status (active, parked, completed) plus ideas. Returns pre-formatted markdown by default; pass `format="json"` for structured data |
+| `create_workstream` | Create a new workstream: add to registry, write initial state file. Optional `git_strategy`/`git_branch`/`worktree_path` for git integration. |
+| `park_workstream` | Save state and set workstream status to parked. Optional `remove_worktree` to clean up worktree. |
+| `switch_workstream` | Save current workstream, activate target, write session marker, return target state. Returns git warnings and stash reminders. |
+| `list_workstreams` | List all workstreams grouped by status (active, parked, completed) plus ideas. Shows branch/worktree info inline. Returns pre-formatted markdown by default; pass `format="json"` for structured data |
+| `manage_worktree` | Attach, detach, remove, or list relay-managed git worktrees |
 | `manage_idea` | Add, remove, or list ideas for future work |
 | `summarize_activity` | Summarize recent activity grouped by workstream. Always writes markdown to file; returns full markdown inline (≤200 lines) or overview + file path (longer). Pass `format="json"` for structured data |
 
