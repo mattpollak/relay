@@ -78,6 +78,9 @@ def create_workstream(
     description: str = "",
     project_dir: str = "",
     color: str = "",
+    git_strategy: str | None = None,
+    git_branch: str | None = None,
+    worktree_path: str | None = None,
 ) -> dict:
     """Create a new workstream: add to registry, write initial state file."""
     registry = read_registry(data_dir)
@@ -94,6 +97,35 @@ def create_workstream(
     }
     if color:
         entry["color"] = color
+
+    # Git strategy
+    if git_strategy:
+        from .git_ops import (
+            create_worktree,
+            derive_worktree_path,
+            get_current_branch,
+        )
+
+        branch = git_branch
+        if not branch and project_dir:
+            branch = get_current_branch(Path(project_dir))
+        if not branch:
+            return {"status": "error", "message": "git_branch required (could not auto-detect)"}
+
+        git_block: dict = {"strategy": git_strategy, "branch": branch}
+
+        if git_strategy == "worktree":
+            if not project_dir:
+                return {"status": "error", "message": "project_dir required for worktree strategy"}
+            wt_path = worktree_path or derive_worktree_path(project_dir, branch)
+            if not Path(wt_path).exists():
+                result = create_worktree(Path(project_dir), Path(wt_path), branch)
+                if result["status"] == "error":
+                    return result
+            git_block["worktree_path"] = wt_path
+
+        entry["git"] = git_block
+
     registry["workstreams"][name] = entry
     atomic_write(data_dir / "workstreams.json", json.dumps(registry, indent=2) + "\n")
 
@@ -331,6 +363,9 @@ def update_workstream(
     description: str | None = None,
     project_dir: str | None = None,
     color: str | None = None,
+    git_strategy: str | None = None,
+    git_branch: str | None = None,
+    worktree_path: str | None = None,
 ) -> dict:
     """Update mutable fields on an existing workstream."""
     registry = read_registry(data_dir)
@@ -351,6 +386,40 @@ def update_workstream(
         else:
             entry.pop("color", None)
         updated.append("color")
+
+    if git_strategy is not None:
+        if git_strategy == "":
+            entry.pop("git", None)
+        else:
+            branch = git_branch
+            if not branch:
+                existing_git = entry.get("git")
+                if existing_git:
+                    branch = existing_git.get("branch")
+            if not branch:
+                proj = entry.get("project_dir", "")
+                if proj:
+                    from .git_ops import get_current_branch
+                    branch = get_current_branch(Path(proj))
+            if not branch:
+                return {"status": "error", "message": "git_branch required (could not auto-detect)"}
+
+            git_block: dict = {"strategy": git_strategy, "branch": branch}
+            if git_strategy == "worktree":
+                wt = worktree_path
+                if not wt:
+                    existing_git = entry.get("git")
+                    if existing_git:
+                        wt = existing_git.get("worktree_path")
+                if not wt:
+                    from .git_ops import derive_worktree_path
+                    proj = entry.get("project_dir", "")
+                    if proj:
+                        wt = derive_worktree_path(proj, branch)
+                if wt:
+                    git_block["worktree_path"] = wt
+            entry["git"] = git_block
+        updated.append("git")
 
     if not updated:
         return {"status": "noop", "message": "No fields to update"}

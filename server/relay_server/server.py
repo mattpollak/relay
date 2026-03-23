@@ -1170,6 +1170,9 @@ def create_workstream(
     ctx: Context[ServerSession, AppContext],
     project_dir: str = "",
     color: str = "",
+    git_strategy: str | None = None,
+    git_branch: str | None = None,
+    worktree_path: str | None = None,
 ) -> dict:
     """Create a new workstream with initial state file.
 
@@ -1178,10 +1181,17 @@ def create_workstream(
         description: Brief description of the workstream
         project_dir: Project directory path (optional)
         color: Background color hex (e.g. "#0d1a2d") for terminal decoration (optional)
+        git_strategy: Git strategy: "branch" (track branch) or "worktree" (create worktree). Omit for no git tracking.
+        git_branch: Primary branch name. Auto-detected from project_dir if omitted.
+        worktree_path: Absolute path for worktree. Auto-derived if omitted (sibling dir pattern).
     """
     from .workstreams import get_data_dir
     from .workstreams import create_workstream as _create
-    return _create(data_dir=get_data_dir(), name=name, description=description, project_dir=project_dir, color=color)
+    return _create(
+        data_dir=get_data_dir(), name=name, description=description,
+        project_dir=project_dir, color=color,
+        git_strategy=git_strategy, git_branch=git_branch, worktree_path=worktree_path,
+    )
 
 
 @mcp.tool()
@@ -1191,6 +1201,9 @@ def update_workstream(
     description: str | None = None,
     project_dir: str | None = None,
     color: str | None = None,
+    git_strategy: str | None = None,
+    git_branch: str | None = None,
+    worktree_path: str | None = None,
 ) -> dict:
     """Update fields on an existing workstream.
 
@@ -1201,10 +1214,17 @@ def update_workstream(
         description: New description (optional)
         project_dir: New project directory path (optional)
         color: Background color hex for terminal decoration, e.g. "#0d1a2d" (optional, empty string removes)
+        git_strategy: Git strategy: "branch" or "worktree". Empty string removes git config.
+        git_branch: Primary branch name. Auto-detected if omitted.
+        worktree_path: Absolute path for worktree. Auto-derived if omitted.
     """
     from .workstreams import get_data_dir
     from .workstreams import update_workstream as _update
-    return _update(data_dir=get_data_dir(), name=name, description=description, project_dir=project_dir, color=color)
+    return _update(
+        data_dir=get_data_dir(), name=name, description=description,
+        project_dir=project_dir, color=color,
+        git_strategy=git_strategy, git_branch=git_branch, worktree_path=worktree_path,
+    )
 
 
 @mcp.tool()

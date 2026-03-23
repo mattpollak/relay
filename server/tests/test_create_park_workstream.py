@@ -161,3 +161,96 @@ def test_park_nonexistent_fails():
             assert result["status"] == "error"
         finally:
             conn.close()
+
+
+def test_create_with_branch_strategy():
+    """create_workstream stores git block with branch strategy."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir) / "data"
+        data_dir.mkdir()
+        from relay_server.workstreams import create_workstream, read_registry
+        result = create_workstream(
+            data_dir=data_dir, name="test-ws", description="Test",
+            git_strategy="branch", git_branch="feat/test",
+        )
+        assert result["status"] == "created"
+        reg = read_registry(data_dir)
+        git = reg["workstreams"]["test-ws"].get("git")
+        assert git is not None
+        assert git["strategy"] == "branch"
+        assert git["branch"] == "feat/test"
+        assert "worktree_path" not in git
+
+
+def test_create_with_worktree_strategy():
+    """create_workstream stores git block with worktree strategy and creates worktree."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        import subprocess
+        repo = Path(tmpdir) / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", str(repo)], capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t.com"], capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "T"], capture_output=True)
+        (repo / "f.txt").write_text("x")
+        subprocess.run(["git", "-C", str(repo), "add", "."], capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"], capture_output=True)
+
+        data_dir = Path(tmpdir) / "data"
+        data_dir.mkdir()
+        wt_path = Path(tmpdir) / "worktree"
+        from relay_server.workstreams import create_workstream, read_registry
+        result = create_workstream(
+            data_dir=data_dir, name="test-ws", description="Test",
+            project_dir=str(repo), git_strategy="worktree",
+            git_branch="feat/wt", worktree_path=str(wt_path),
+        )
+        assert result["status"] == "created"
+        assert wt_path.exists()
+        reg = read_registry(data_dir)
+        git = reg["workstreams"]["test-ws"]["git"]
+        assert git["strategy"] == "worktree"
+        assert git["worktree_path"] == str(wt_path)
+
+
+def test_create_without_git_strategy():
+    """create_workstream without git params has no git block."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir) / "data"
+        data_dir.mkdir()
+        from relay_server.workstreams import create_workstream, read_registry
+        create_workstream(data_dir=data_dir, name="test-ws", description="Test")
+        reg = read_registry(data_dir)
+        assert reg["workstreams"]["test-ws"].get("git") is None
+
+
+def test_update_adds_git_strategy():
+    """update_workstream can add git config to existing workstream."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir) / "data"
+        data_dir.mkdir()
+        from relay_server.workstreams import create_workstream, update_workstream, read_registry
+        create_workstream(data_dir=data_dir, name="test-ws", description="Test")
+        result = update_workstream(
+            data_dir=data_dir, name="test-ws",
+            git_strategy="branch", git_branch="feat/new",
+        )
+        assert result["status"] == "updated"
+        assert "git" in result["fields"]
+        reg = read_registry(data_dir)
+        assert reg["workstreams"]["test-ws"]["git"]["branch"] == "feat/new"
+
+
+def test_update_removes_git_strategy():
+    """update_workstream with git_strategy="" removes git block."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir) / "data"
+        data_dir.mkdir()
+        from relay_server.workstreams import create_workstream, update_workstream, read_registry
+        create_workstream(
+            data_dir=data_dir, name="test-ws", description="Test",
+            git_strategy="branch", git_branch="feat/x",
+        )
+        result = update_workstream(data_dir=data_dir, name="test-ws", git_strategy="")
+        assert result["status"] == "updated"
+        reg = read_registry(data_dir)
+        assert reg["workstreams"]["test-ws"].get("git") is None
