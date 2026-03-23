@@ -25,6 +25,13 @@ Create a new workstream with the name and description provided in `$ARGUMENTS`.
    ```
    If it returns an error (duplicate), tell the user.
 
-5. **Check for matching ideas.** Call `manage_idea(action="list")`. If any idea's text closely matches the new workstream's name or description, ask the user if they'd like to remove it. If yes, call `manage_idea(action="remove", idea_id=<id>)`.
+5. **Ask about git strategy (optional).** If the project directory is a git repo, ask the user:
+   - **None** (default) — no branch tracking
+   - **Branch** — track the current branch (relay will warn on mismatch when switching)
+   - **Worktree** — create a worktree for filesystem isolation
 
-6. **Confirm.** Tell the user the workstream was created and is now active.
+   If they choose Branch or Worktree, the `create_workstream` call above should include `git_strategy` and optionally `git_branch`. If Branch, auto-detect from current branch. If Worktree, also ask about worktree path or use the default (sibling directory).
+
+6. **Check for matching ideas.** Call `manage_idea(action="list")`. If any idea's text closely matches the new workstream's name or description, ask the user if they'd like to remove it. If yes, call `manage_idea(action="remove", idea_id=<id>)`.
+
+7. **Confirm.** Tell the user the workstream was created and is now active.

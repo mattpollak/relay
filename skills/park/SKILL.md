@@ -26,4 +26,6 @@ Park the active workstream (or the one named `$ARGUMENTS`), saving its state fir
    ```
    See `/relay:save` for state file content guidelines and hint writing guidelines.
 
+   If the workstream has a worktree (git strategy is "worktree"), ask the user if they want to remove it. If yes, include `remove_worktree=true` in the call. The tool will refuse if the worktree has uncommitted changes.
+
 3. **Confirm.** Tell the user the workstream is parked. Mention they can resume with `/relay:switch <name>`.
