@@ -11,7 +11,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
-from mcp.types import ToolAnnotations
+from mcp.types import EmbeddedResource, TextContent, TextResourceContents, ToolAnnotations
 
 from .db import ensure_schema, get_connection, get_db_path
 from .formatter import format_conversation
@@ -1439,6 +1439,52 @@ def list_workstreams(
     from .workstreams import get_data_dir
     from .workstreams import list_workstreams as _list
     return _list(data_dir=get_data_dir(), format=format)
+
+
+@mcp.tool(annotations=_READ_ONLY)
+def show_dashboard(
+    ctx: Context[ServerSession, AppContext],
+    format: str = "html",
+) -> list | str:
+    """Render a visual workstream dashboard.
+
+    Returns an inline HTML dashboard via MCP Apps (rendered in the conversation).
+    Pass format="markdown" for text-only output.
+
+    Args:
+        format: "html" (default) returns an inline MCP Apps dashboard.
+                "markdown" returns the same output as list_workstreams.
+    """
+    from .workstreams import get_data_dir
+    from .workstreams import list_workstreams as _list
+
+    data_dir = get_data_dir()
+
+    if format == "markdown":
+        return _list(data_dir=data_dir, format="markdown")
+
+    from .dashboard import render_dashboard_html
+    from .workstreams import read_ideas, read_registry
+
+    registry = read_registry(data_dir)
+    workstreams = registry.get("workstreams", {})
+    ideas = read_ideas(data_dir)
+    html = render_dashboard_html(workstreams=workstreams, ideas=ideas)
+
+    total_ws = len(workstreams)
+    total_ideas = len(ideas)
+
+    return [
+        TextContent(type="text", text=f"Workstream dashboard ({total_ws} workstreams, {total_ideas} ideas)"),
+        EmbeddedResource(
+            type="resource",
+            resource=TextResourceContents(
+                uri="ui://relay/dashboard",
+                mimeType="text/html;profile=mcp-app",
+                text=html,
+            ),
+        ),
+    ]
 
 
 @mcp.tool(annotations=_WRITE)

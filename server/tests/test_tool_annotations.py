@@ -7,7 +7,7 @@ from relay_server.server import mcp
 READ_ONLY_TOOLS = {
     "search_history", "get_conversation", "list_sessions", "list_tags",
     "get_session_summaries", "get_status", "list_workstreams",
-    "summarize_activity",
+    "summarize_activity", "show_dashboard",
 }
 
 WRITE_IDEMPOTENT_TOOLS = {

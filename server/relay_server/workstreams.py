@@ -33,6 +33,19 @@ def read_registry(data_dir: Path | None = None) -> dict:
         return {"version": 1, "workstreams": {}}
 
 
+def read_ideas(data_dir: Path | None = None) -> list[dict]:
+    """Read ideas.json. Returns empty list if missing."""
+    if data_dir is None:
+        data_dir = get_data_dir()
+    ideas_path = data_dir / "ideas.json"
+    if not ideas_path.exists():
+        return []
+    try:
+        return json.loads(ideas_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
 def write_registry_entry(
     data_dir: Path, name: str, entry: dict
 ) -> None:
