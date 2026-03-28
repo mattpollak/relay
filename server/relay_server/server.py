@@ -1339,7 +1339,6 @@ async def switch_workstream(
     from .elicitation import (
         WorkstreamPickerSchema,
         WorkstreamCreateSchema,
-        build_picker_enum,
         elicit_or_fallback,
         parse_picker_choice,
     )

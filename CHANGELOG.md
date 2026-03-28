@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.15.0] - 2026-03-28
+
+### Added
+- **Tool annotations** — All MCP tools now declare `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` for host auto-approval and UI hints
+- **PostCompact hook** — Re-injects active workstream pointer after context compaction to prevent context loss
+- **CwdChanged hook** — Suggests workstream switch when working directory matches a different workstream's project
+- **Elicitation forms** — `switch_workstream` and `create_workstream` present structured forms for workstream selection/creation (with automatic fallback for hosts that don't support elicitation)
+- **`show_dashboard` tool** — Renders an inline HTML dashboard of all workstreams via MCP Apps, with status grouping, terminal color previews, and idea badges
+
 ## [0.14.0] - 2026-03-22
 
 ### Added
