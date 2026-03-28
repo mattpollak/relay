@@ -7,21 +7,31 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from relay_server.elicitation import (
-    WorkstreamPickerSchema,
     WorkstreamCreateSchema,
     build_picker_enum,
+    build_picker_schema,
     parse_picker_choice,
     elicit_or_fallback,
 )
 
+SAMPLE_WORKSTREAMS = {"relay": {"status": "active"}, "squadkeeper": {"status": "parked"}}
 
-def test_picker_schema_accepts_valid_workstream():
-    schema = WorkstreamPickerSchema(workstream="relay")
-    assert schema.workstream == "relay"
+
+def test_picker_schema_has_enum_choices():
+    PickerSchema = build_picker_schema(SAMPLE_WORKSTREAMS)
+    schema = PickerSchema(workstream="relay (active)")
+    assert schema.workstream == "relay (active)"
+    # Verify enum is in the JSON schema
+    json_schema = PickerSchema.model_json_schema()
+    enum_values = json_schema["properties"]["workstream"]["enum"]
+    assert "relay (active)" in enum_values
+    assert "squadkeeper (parked)" in enum_values
+    assert "+ Create new..." in enum_values
 
 
 def test_picker_schema_accepts_create_new():
-    schema = WorkstreamPickerSchema(workstream="+ Create new...")
+    PickerSchema = build_picker_schema(SAMPLE_WORKSTREAMS)
+    schema = PickerSchema(workstream="+ Create new...")
     assert schema.workstream == "+ Create new..."
 
 
@@ -47,8 +57,7 @@ def test_create_schema_accepts_full():
 
 
 def test_build_picker_enum():
-    workstreams = {"relay": {"status": "active"}, "squadkeeper": {"status": "parked"}}
-    enum = build_picker_enum(workstreams)
+    enum = build_picker_enum(SAMPLE_WORKSTREAMS)
     assert "relay (active)" in enum
     assert "squadkeeper (parked)" in enum
     assert "+ Create new..." in enum
@@ -75,21 +84,23 @@ def test_parse_picker_choice_no_parens():
 @pytest.mark.asyncio
 async def test_elicit_or_fallback_returns_none_on_error():
     """If elicitation raises, fallback returns None."""
+    PickerSchema = build_picker_schema(SAMPLE_WORKSTREAMS)
     mock_ctx = MagicMock()
     mock_ctx.elicit = AsyncMock(side_effect=Exception("Not supported"))
-    result = await elicit_or_fallback(mock_ctx, "Pick one", WorkstreamPickerSchema)
+    result = await elicit_or_fallback(mock_ctx, "Pick one", PickerSchema)
     assert result is None
 
 
 @pytest.mark.asyncio
 async def test_elicit_or_fallback_returns_data_on_accept():
     """If user accepts, return the validated data."""
+    PickerSchema = build_picker_schema(SAMPLE_WORKSTREAMS)
     mock_result = MagicMock()
     mock_result.action = "accept"
-    mock_result.data = WorkstreamPickerSchema(workstream="relay (active)")
+    mock_result.data = PickerSchema(workstream="relay (active)")
     mock_ctx = MagicMock()
     mock_ctx.elicit = AsyncMock(return_value=mock_result)
-    result = await elicit_or_fallback(mock_ctx, "Pick one", WorkstreamPickerSchema)
+    result = await elicit_or_fallback(mock_ctx, "Pick one", PickerSchema)
     assert result is not None
     assert result.workstream == "relay (active)"
 
@@ -97,9 +108,10 @@ async def test_elicit_or_fallback_returns_data_on_accept():
 @pytest.mark.asyncio
 async def test_elicit_or_fallback_returns_none_on_decline():
     """If user declines, return None."""
+    PickerSchema = build_picker_schema(SAMPLE_WORKSTREAMS)
     mock_result = MagicMock()
     mock_result.action = "decline"
     mock_ctx = MagicMock()
     mock_ctx.elicit = AsyncMock(return_value=mock_result)
-    result = await elicit_or_fallback(mock_ctx, "Pick one", WorkstreamPickerSchema)
+    result = await elicit_or_fallback(mock_ctx, "Pick one", PickerSchema)
     assert result is None

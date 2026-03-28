@@ -1337,8 +1337,8 @@ async def switch_workstream(
         stash_ref: Git stash SHA to store on from workstream (if stashing before switch)
     """
     from .elicitation import (
-        WorkstreamPickerSchema,
         WorkstreamCreateSchema,
+        build_picker_schema,
         elicit_or_fallback,
         parse_picker_choice,
     )
@@ -1355,10 +1355,11 @@ async def switch_workstream(
         if not workstreams:
             return {"status": "error", "message": "No workstreams found. Use create_workstream to create one."}
 
+        PickerSchema = build_picker_schema(workstreams)
         picker_result = await elicit_or_fallback(
             ctx,
             "Select a workstream to switch to",
-            WorkstreamPickerSchema,
+            PickerSchema,
         )
 
         if picker_result is None:

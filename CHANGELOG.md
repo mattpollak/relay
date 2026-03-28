@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.15.1] - 2026-03-28
+
+### Fixed
+- **Elicitation picker rendered as text input** — `switch_workstream` now builds a dynamic Pydantic schema with `json_schema_extra={"enum": choices}` so the workstream picker renders as a dropdown instead of a blank text field
+
 ## [0.15.0] - 2026-03-28
 
 ### Added

@@ -11,11 +11,6 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 
-class WorkstreamPickerSchema(BaseModel):
-    """Schema for workstream selection form."""
-    workstream: str = Field(description="Pick a workstream to switch to")
-
-
 class WorkstreamCreateSchema(BaseModel):
     """Schema for workstream creation form."""
     name: str = Field(description="Lowercase with hyphens, e.g. api-refactor")
@@ -33,6 +28,20 @@ def build_picker_enum(workstreams: dict) -> list[str]:
         choices.append(f"{name} ({status})")
     choices.append("+ Create new...")
     return choices
+
+
+def build_picker_schema(workstreams: dict) -> type[BaseModel]:
+    """Build a dynamic Pydantic model with enum-constrained workstream choices."""
+    choices = build_picker_enum(workstreams)
+
+    class WorkstreamPickerSchema(BaseModel):
+        """Schema for workstream selection form."""
+        workstream: str = Field(
+            description="Pick a workstream to switch to",
+            json_schema_extra={"enum": choices},
+        )
+
+    return WorkstreamPickerSchema
 
 
 def parse_picker_choice(choice: str) -> str | None:
