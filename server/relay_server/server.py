@@ -11,12 +11,24 @@ from pathlib import Path
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
+from mcp.types import ToolAnnotations
 
 from .db import ensure_schema, get_connection, get_db_path
 from .formatter import format_conversation
 from .indexer import index_all, reindex as do_reindex
 
 logger = logging.getLogger(__name__)
+
+# Tool annotation presets
+_READ_ONLY = ToolAnnotations(
+    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+)
+_WRITE_IDEMPOTENT = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False,
+)
+_WRITE = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False,
+)
 
 _DEFAULT_SUMMARY_DIR = "~/.local/share/relay/summaries"
 
@@ -118,7 +130,7 @@ def _validate_tags(tags: list[str]) -> str | None:
     return None
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def search_history(
     query: str,
     ctx: Context[ServerSession, AppContext],
@@ -223,7 +235,7 @@ def search_history(
         conn.close()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def get_conversation(
     session_id_or_slug: str,
     ctx: Context[ServerSession, AppContext],
@@ -339,7 +351,7 @@ def get_conversation(
         conn.close()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def list_sessions(
     ctx: Context[ServerSession, AppContext],
     limit: int = 20,
@@ -422,7 +434,7 @@ def list_sessions(
         conn.close()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_IDEMPOTENT)
 def tag_message(
     message_id: int,
     tags: list[str],
@@ -471,7 +483,7 @@ def tag_message(
         conn.close()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_IDEMPOTENT)
 def tag_session(
     session_id: str,
     tags: list[str],
@@ -516,7 +528,7 @@ def tag_session(
         conn.close()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def list_tags(
     ctx: Context[ServerSession, AppContext],
     scope: str = "all",
@@ -613,7 +625,7 @@ def _get_session_summaries_from_db(
     return results
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def get_session_summaries(
     session_ids: list[str],
     ctx: Context[ServerSession, AppContext],
@@ -1049,7 +1061,7 @@ def _summarize_activity_impl(
 _SUMMARY_INLINE_THRESHOLD = 200  # lines; summaries longer than this get overview only
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def summarize_activity(
     date_from: str,
     ctx: Context[ServerSession, AppContext],
@@ -1123,7 +1135,7 @@ def summarize_activity(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_IDEMPOTENT)
 def save_workstream(
     name: str,
     state_content: str,
@@ -1169,7 +1181,7 @@ def save_workstream(
         conn.close()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def create_workstream(
     name: str,
     description: str,
@@ -1200,7 +1212,7 @@ def create_workstream(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_IDEMPOTENT)
 def update_workstream(
     name: str,
     ctx: Context[ServerSession, AppContext],
@@ -1233,7 +1245,7 @@ def update_workstream(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def park_workstream(
     name: str,
     state_content: str,
@@ -1272,7 +1284,7 @@ def park_workstream(
         conn.close()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def switch_workstream(
     to_name: str,
     ctx: Context[ServerSession, AppContext],
@@ -1313,7 +1325,7 @@ def switch_workstream(
         conn.close()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def get_status(
     ctx: Context[ServerSession, AppContext],
     attached: str | None = None,
@@ -1334,7 +1346,7 @@ def get_status(
     return _get_status(data_dir=get_data_dir(), attached=attached, format=format)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 def list_workstreams(
     ctx: Context[ServerSession, AppContext],
     format: str = "markdown",
@@ -1348,7 +1360,7 @@ def list_workstreams(
     return _list(data_dir=get_data_dir(), format=format)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def manage_idea(
     action: str,
     ctx: Context[ServerSession, AppContext],
@@ -1367,7 +1379,7 @@ def manage_idea(
     return _manage(data_dir=get_data_dir(), action=action, text=text, idea_id=idea_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def manage_worktree(
     action: str,
     ctx: Context[ServerSession, AppContext],
@@ -1386,7 +1398,7 @@ def manage_worktree(
     return _manage(data_dir=get_data_dir(), action=action, name=name, path=path)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_IDEMPOTENT)
 def reindex(ctx: Context[ServerSession, AppContext]) -> dict:
     """Force a complete re-index of all conversation transcripts.
 
@@ -1404,7 +1416,7 @@ def reindex(ctx: Context[ServerSession, AppContext]) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_IDEMPOTENT)
 def fix_other_hints(ctx: Context[ServerSession, AppContext]) -> dict:
     """Re-attribute session hints tagged as 'other' to the correct workstream.
 
@@ -1421,7 +1433,7 @@ def fix_other_hints(ctx: Context[ServerSession, AppContext]) -> dict:
         conn.close()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE_IDEMPOTENT)
 def write_session_hint(
     session_id: str,
     workstream: str,
