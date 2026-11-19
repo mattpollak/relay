@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.15.3] - 2026-11-19
+
+### Changed
+- **Repo hygiene** — Stopped tracking internal planning docs under `docs/plans/` (already gitignored, but committed before the ignore rule). Added `docs/superpowers/` and `.superpowers/` to `.gitignore`.
+
 ## [0.15.2] - 2026-03-28
 
 ### Fixed
