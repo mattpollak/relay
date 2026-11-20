@@ -176,6 +176,35 @@ def apply_remote(
 
     changes: dict[str, Any] = {}
     conflicts: list[dict] = []
+
+    # Redactions from other machines: swap in the scrubbed payloads (pure
+    # removals only) before anything is written out.
+    redactions = [e for e in inserted if e["type"] == "msg.redact"]
+    redacted_messages = 0
+    text_pairs: list[tuple[str, str]] = []
+    if redactions:
+        from .redact import add_fingerprints, apply_message_changes, replace_event_payloads
+
+        for ev in redactions:
+            value = ev["payload"].get("value") or {}
+            if isinstance(value.get("fingerprints"), list):
+                add_fingerprints(store, value["fingerprints"])
+                store.conn.execute("DELETE FROM meta WHERE k = 'redact_scan_id'")  # rescan everything
+            for key in replace_event_payloads(store, value.get("events") or {}, text_pairs):
+                old_raw = before.get(key, (None, None))[1]
+                new_value = store.head_value(key)
+                if _canon(json.loads(old_raw) if old_raw else None) != _canon(new_value):
+                    changes[key] = new_value
+            if db_path is not None and Path(db_path).exists():
+                from .db import get_connection
+
+                conn = get_connection(db_path)
+                try:
+                    redacted_messages += apply_message_changes(conn, value.get("messages") or [])
+                    conn.commit()
+                finally:
+                    conn.close()
+
     for key, evs in sorted(by_key.items()):
         old_id, old_raw = before.get(key, (None, None))
         old_value = json.loads(old_raw) if old_raw is not None else None
@@ -190,10 +219,27 @@ def apply_remote(
 
     host_id = store.host["host_id"] if store.host else None
     written = materialize(store, data_dir, db_path, changes, host_id)
+    if text_pairs:
+        from .redact import scrub_side_copies
+
+        scrub_side_copies(data_dir, text_pairs)  # after materialize, which may have made a .bak
+    if redactions and db_path is not None and Path(db_path).exists():
+        # The same secret may also be in this machine's own transcripts.
+        from .db import get_connection
+        from .redact import scrub_new_messages
+
+        conn = get_connection(db_path)
+        try:
+            redacted_messages += scrub_new_messages(store, conn)
+            conn.commit()
+        finally:
+            conn.close()
     conflict_files = [_write_conflict(store, data_dir, c) for c in conflicts]
     return {
         "received": len(events),
         "inserted": len(inserted),
+        "redactions": len(redactions),
+        "redacted_messages": redacted_messages,
         "changed_keys": sorted(changes),
         "conflicts": [c for c in conflict_files if c],
         "errors": written["errors"] + (
@@ -265,7 +311,7 @@ def materialize(
     errors: list[str] = []
     ws_changes = {k[3:]: v for k, v in changes.items() if k.startswith("ws/")}
     idea_changes = {k[5:]: v for k, v in changes.items() if k.startswith("idea/")}
-    db_changes = {k: v for k, v in changes.items() if k.startswith(("hint/", "stag/", "mtag/"))}
+    db_changes = {k: v for k, v in changes.items() if k.startswith(("msgb/", "hint/", "stag/", "mtag/"))}
 
     if ws_changes:
         errors += _write_registry(store, data_dir, ws_changes, host_id)
@@ -280,11 +326,17 @@ def materialize(
     if db_changes and db_path is not None and Path(db_path).exists():
         from .db import get_connection
 
+        heads = store.heads()
         conn = get_connection(db_path)
         try:
-            for key, value in sorted(db_changes.items()):
-                if value is not None:
-                    restore_item(conn, key, value, create_session=True)
+            # Message batches first, so hints and tags find their sessions.
+            for key, value in sorted(db_changes.items(), key=lambda kv: (not kv[0].startswith("msgb/"), kv[0])):
+                if value is None:
+                    continue
+                origin = heads.get(key, ("",))[0].rsplit("-", 1)[-1]
+                if host_id and origin == host_id:
+                    continue  # our own items, echoed back in someone's history batch
+                restore_item(conn, key, value, create_session=True, origin_host=origin)
             conn.commit()
         except sqlite3.Error as exc:
             errors.append(f"index.db: {exc}")

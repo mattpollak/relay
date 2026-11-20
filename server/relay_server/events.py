@@ -88,6 +88,8 @@ _TYPES = {
     "host": ("host.info", None),
     "wsdir": ("ws.local", "ws.local.delete"),
     "git": ("git.snapshot", None),
+    "msgb": ("msg.batch", None),
+    "redact": ("msg.redact", None),
 }
 _UPDATE_TYPES = {"ws": "ws.update", "idea": "idea.update"}
 
@@ -243,14 +245,29 @@ class EventStore:
         self.path = self.data_dir / EVENTS_DB
         self.conn = sqlite3.connect(str(self.path), timeout=10, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=10000")
-        self.conn.executescript(_SCHEMA)
+        self._init_schema()
         try:
             os.chmod(self.path, 0o600)
         except OSError:
             pass
         self.host: dict | None = None
+
+    def _init_schema(self) -> None:
+        # Switching a new database to WAL doesn't wait on busy_timeout, so two
+        # relay processes creating events.db at once can see "database is
+        # locked" here. Retry briefly; once WAL is set it persists.
+        for attempt in range(200):
+            try:
+                mode = self.conn.execute("PRAGMA journal_mode").fetchone()[0]
+                if str(mode).lower() != "wal":
+                    self.conn.execute("PRAGMA journal_mode=WAL")
+                self.conn.executescript(_SCHEMA)
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc) or attempt == 199:
+                    raise
+                time.sleep(0.02 + secrets.randbelow(30) / 1000)
 
     def close(self) -> None:
         self.conn.close()
@@ -657,13 +674,19 @@ def restore_authored_rows(data_dir: Path, conn: sqlite3.Connection) -> dict:
         store.close()
     own = _own_host_id(data_dir)
 
-    counts = {"hints": 0, "session_tags": 0, "message_tags": 0}
-    for key, (event_id, raw) in heads.items():
+    counts = {"hints": 0, "session_tags": 0, "message_tags": 0, "messages": 0, "redactions": 0}
+    # Message batches first (so hints and tags find their sessions), redactions
+    # last (re-applied to transcripts that were just re-indexed).
+    def order(kv: tuple) -> int:
+        return 0 if kv[0].startswith("msgb/") else 2 if kv[0].startswith("redact/") else 1
+
+    for key, (event_id, raw) in sorted(heads.items(), key=order):
         if raw is None:
             continue
-        # Hints from other machines refer to sessions this index doesn't have.
-        remote = own is not None and not event_id.endswith(f"-{own}")
-        kind = restore_item(conn, key, json.loads(raw), create_session=remote)
+        # Items from other machines refer to sessions this index doesn't have.
+        origin = event_id.rsplit("-", 1)[-1]
+        remote = own is not None and origin != own
+        kind = restore_item(conn, key, json.loads(raw), create_session=remote, origin_host=origin if remote else None)
         if kind:
             counts[kind] += 1
     conn.commit()
@@ -678,10 +701,24 @@ def _own_host_id(data_dir: Path) -> str | None:
 
 def restore_item(
     conn: sqlite3.Connection, key: str, value: Any, *, create_session: bool = False,
+    origin_host: str | None = None,
 ) -> str | None:
-    """Write one hint or manual tag into index.db. Returns which kind was
-    written ("hints", "session_tags", "message_tags") or None. No commit."""
+    """Write one hint, manual tag or message batch into index.db. Returns which
+    kind was written ("hints", "session_tags", "message_tags", "messages") or
+    None. create_session/origin_host: the item came from another machine. No commit."""
     from .db import ensure_session
+
+    if key.startswith("redact/"):
+        from .redact import apply_message_changes
+
+        changes = value.get("messages") if isinstance(value, dict) else None
+        return "redactions" if isinstance(changes, list) and apply_message_changes(conn, changes) else None
+    if key.startswith("msgb/"):
+        if not create_session:
+            return None  # this machine's own messages come from its transcripts
+        from .sync_messages import apply_message_batch
+
+        return "messages" if apply_message_batch(conn, key, value) else None
 
     def session_exists(sid: str) -> bool:
         return conn.execute("SELECT 1 FROM sessions WHERE session_id = ?", (sid,)).fetchone() is not None
@@ -701,9 +738,10 @@ def restore_item(
                 # hint so date-filtered views (summarize_activity) include it.
                 conn.execute(
                     """UPDATE sessions SET first_timestamp = COALESCE(first_timestamp, ?),
-                           last_timestamp = COALESCE(last_timestamp, ?)
-                       WHERE session_id = ?""",
-                    (ts, ts, sid),
+                           last_timestamp = COALESCE(last_timestamp, ?),
+                           origin_host = COALESCE(origin_host, ?)
+                       WHERE session_id = ? AND message_count = 0""",
+                    (ts, ts, origin_host, sid),
                 )
         elif not session_exists(sid):
             return None

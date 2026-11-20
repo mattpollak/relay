@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.18.0] - 2026-11-20
+
+### Added
+- **Cross-machine search** (sync scope `state+messages`, opt-in) — The messages relay indexes from each machine's transcripts are shared through sync, so `search_history`, `get_conversation`, `list_sessions` and `summarize_activity` cover every machine. Results from another machine carry a `host` field (and a **Machine:** line in conversations). The first push backfills the whole indexed history; later pushes send only new messages; `reindex` keeps other machines' messages. Raw transcripts never leave the machine.
+- **`/relay:redact` and `redact_history`** — Remove text such as a leaked secret from relay's search index, hints, event log and files (state history, `.bak` and conflict copies, legacy hint files), replacing it with `[redacted]`; dry run first. With sync on, other machines apply it on their next sync and every machine rewrites its shared-folder batches so old ciphertext is deleted. The secret is never sent: machines only exchange scrubbed versions and accept them only if they keep the exact same structure and every field only loses text. Lists Claude Code transcripts and relay backups that still contain it. Works in local-only mode too.
+- **Redacted text stays out** — Each redaction keeps a salted fingerprint (never the text) that travels with it to every machine. Newly indexed messages — e.g. the `/relay:redact` command line itself, or a reply that repeats the secret, both still in Claude Code's raw transcripts — are scrubbed before they're searchable or shared, on every machine, including copies in the other machines' own transcripts.
+
+### Fixed
+- **Shared folder hardened** — The sync folder is now one flat directory (format 2) and treated as untrusted input: relay only creates new files (never overwrites or follows links), deletes only files it wrote itself and that are unchanged, and reads only regular files. Planted symlinks, FIFOs or swapped files can no longer redirect writes or deletes outside the folder, or hang a pull.
+- **Large pushes split across files weren't read** — A push over 1000 events (or, now, ~4 MB) wrote continuation files that other machines skipped, so a big first sync could silently miss data.
+- **Concurrent first start** — Two relay processes creating `events.db` at the same moment could fail with "database is locked"; one of them then skipped recording changes. Now retried.
+
 ## [0.17.0] - 2026-11-20
 
 ### Added

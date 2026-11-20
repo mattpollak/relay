@@ -174,6 +174,7 @@ claude --plugin-dir /path/to/relay
 | `/relay:summarize 48h` | Summarize recent activity grouped by workstream (standup prep, brag books) |
 | `/relay:backfill 7d` | Generate session hints for older sessions (one-time cost for efficient future summaries) |
 | `/relay:sync` | Optional multi-machine sync: `status`, `setup`, `now`, `approve`, `revoke`, `disable` (off by default) |
+| `/relay:redact <text>` | Remove text (e.g. a leaked secret) from relay's history, and from every synced machine |
 
 ### Natural language
 
@@ -200,6 +201,7 @@ The MCP server provides tools that Claude uses directly during your session — 
 | `list_workstreams` | List all workstreams grouped by status (active, parked, completed) plus ideas. Shows branch/worktree info inline. Returns pre-formatted markdown by default; pass `format="json"` for structured data |
 | `manage_worktree` | Attach, detach, remove, or list relay-managed git worktrees |
 | `manage_sync` | Optional multi-machine sync through a shared folder: status, setup, sync now, approve/revoke a machine, disable |
+| `redact_history` | Remove text from the index, hints, event log and relay's files (dry run first); propagates with sync |
 | `update_workstream` | Update workstream fields (description, project_dir, color, git strategy). Only provided fields are changed. |
 | `manage_idea` | Add, remove, or list ideas for future work |
 | `summarize_activity` | Summarize recent activity grouped by workstream. Always writes markdown to file; returns full markdown inline (≤200 lines) or overview + file path (longer). Pass `format="json"` for structured data |
@@ -270,7 +272,7 @@ Configuration lives at `${XDG_CONFIG_HOME:-$HOME/.config}/relay/`:
     └── ...
 ```
 
-The conversation search index lives at `~/.local/share/relay/index.db` (SQLite, WAL mode). It is derived from Claude Code's transcripts and can be rebuilt with `reindex`; hints and manual tags are restored from `events.db` afterwards.
+The conversation search index lives at `~/.local/share/relay/index.db` (SQLite, WAL mode). It is derived from Claude Code's transcripts and can be rebuilt with `reindex`; hints, manual tags and other machines' messages are restored from `events.db` afterwards.
 
 ### Event log
 
@@ -309,7 +311,10 @@ Off by default. If you use relay on more than one computer, sync shares workstre
 - **Work left on another machine.** Each push records a git snapshot per workstream repo (uncommitted files, unpushed commits, stashes). At session start and on `/relay:switch` you'll see e.g. "work on desk not visible here: branch feat/x: 2 unpushed commits". relay never runs `git fetch` itself; when one is needed it says so and Claude offers to run it.
 - **Per-machine settings stay per machine:** `project_dir`, worktree paths, stashes, idea numbers.
 
-Not yet available: the NAS mailbox (`http`) backend and sharing conversation messages for cross-machine search.
+- **Cross-machine search (opt-in).** With scope `state+messages`, the messages relay indexes from each machine's transcripts are shared too, so `search_history`, `get_conversation`, `list_sessions` and summaries cover every machine; results from another machine say which one. Raw transcripts never leave the machine.
+- **Redaction.** `/relay:redact <text>` removes a leaked secret from relay's index, hints, event log and files, and — with sync on — from every machine and the shared folder's encrypted files. The secret itself is never sent; other machines only accept scrubbed versions that remove text. Claude Code's own transcripts aren't touched; relay lists the ones that still contain it.
+
+Not yet available: the NAS mailbox (`http`) backend.
 
 ## How It Works
 

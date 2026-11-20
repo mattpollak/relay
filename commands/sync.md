@@ -31,7 +31,7 @@ Walk the user through it, one question at a time.
 
 4. **Scope.** Ask what to share:
    - **state** (recommended): workstreams, state files, ideas, session hints, tags, and git snapshots (uncommitted/unpushed work per repo).
-   - **state+messages**: also conversation messages (not available yet; behaves like `state` for now). Transcripts can contain secrets, which is why this is a separate choice.
+   - **state+messages**: also conversation messages, so history search, `get_conversation` and summaries cover every machine (results say which machine). Transcripts can contain secrets, which is why this is a separate choice; if one leaks into history, `/relay:redact` removes it from every machine. The first push sends this machine's whole indexed history.
 
 5. **Save.** Call:
    ```

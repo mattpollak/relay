@@ -127,9 +127,19 @@ def ensure_schema(db_path: Path | str) -> None:
         conn.executescript(SCHEMA)
         for trigger_sql in TRIGGERS:
             conn.execute(trigger_sql)
+        _migrate(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Additive column migrations for existing databases."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+    if "origin_host" not in cols:
+        # host_id of the machine a session came from (multi-machine sync);
+        # NULL = this machine.
+        conn.execute("ALTER TABLE sessions ADD COLUMN origin_host TEXT")
 
 
 def ensure_session(conn: sqlite3.Connection, session_id: str) -> None:

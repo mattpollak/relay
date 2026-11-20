@@ -66,6 +66,9 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 
         result = ensure_event_log(get_data_dir(), db_path)
         logger.info(f"Event log: {result['status']}, {result['new_events']} new events")
+        from .redact import reapply_known_redactions
+
+        reapply_known_redactions(get_data_dir(), db_path)
     except Exception:
         logger.exception("relay event log: startup failed (relay keeps working without it)")
     yield AppContext(db_path=db_path)
@@ -85,6 +88,14 @@ MAX_TAG_LENGTH = 200
 
 def _get_db_path(ctx: Context[ServerSession, AppContext]) -> Path:
     return ctx.request_context.lifespan_context.db_path
+
+
+def _annotate_hosts(rows: list[dict]) -> list[dict]:
+    """Rows from other machines' sessions get ``host``; local rows are unchanged."""
+    from .sync_messages import annotate_hosts
+    from .workstreams import get_data_dir
+
+    return annotate_hosts(rows, get_data_dir())
 
 
 def _record_events(source: str, db_path: Path | None = None) -> None:
@@ -232,6 +243,7 @@ def search_history(
                 s.slug,
                 s.project_dir,
                 s.git_branch,
+                s.origin_host,
                 m.role,
                 m.timestamp,
                 snippet(messages_fts, 0, '>>>', '<<<', '...', 40) as snippet
@@ -276,7 +288,7 @@ def search_history(
             for r in results:
                 r["session_number"] = session_number_lookup.get(r["session_id"])
 
-        return results
+        return _annotate_hosts(results)
     finally:
         conn.close()
 
@@ -385,6 +397,7 @@ def get_conversation(
                 ).fetchall()
             ]
 
+        sessions = _annotate_hosts(sessions)
         if format == "markdown":
             return format_conversation(sessions, messages)
 
@@ -464,7 +477,7 @@ def list_sessions(
 
         rows = conn.execute(
             f"""SELECT s.session_id, s.project_dir, s.slug, s.first_timestamp,
-                       s.last_timestamp, s.message_count, s.git_branch, s.cwd
+                       s.last_timestamp, s.message_count, s.git_branch, s.cwd, s.origin_host
                 FROM sessions s {where}
                 ORDER BY {order}
                 LIMIT ?""",
@@ -475,7 +488,7 @@ def list_sessions(
         if slug:
             for r in results:
                 r["session_number"] = session_number_lookup.get(r["session_id"])
-        return results
+        return _annotate_hosts(results)
     finally:
         conn.close()
 
@@ -1653,6 +1666,9 @@ def reindex(ctx: Context[ServerSession, AppContext]) -> dict:
             result["restored"] = restore_authored_rows(get_data_dir(), conn)
         finally:
             conn.close()
+        from .redact import reapply_known_redactions
+
+        reapply_known_redactions(get_data_dir(), db_path)
     except Exception:
         logger.exception("relay event log: failed to restore hints/tags after reindex")
     return result
@@ -1819,3 +1835,68 @@ def manage_sync(
         return result if format == "json" else result["message"]
 
     return {"error": f"unknown action {action!r}; use status, setup, now, approve, revoke, or disable"}
+
+
+@mcp.tool(annotations=ToolAnnotations(
+    readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False,
+))
+def redact_history(
+    text: str,
+    ctx: Context[ServerSession, AppContext],
+    session_id: str | None = None,
+    confirm: bool = False,
+) -> dict | str:
+    """Remove text (e.g. a leaked secret) from relay's search index, hints,
+    event log and files — and, with multi-machine sync on, from every machine
+    and the shared folder. Replaced with "[redacted]".
+
+    Call first without confirm to see what would change; then with confirm=True.
+    Never pass a secret the user didn't ask to redact.
+
+    Args:
+        text: The exact text to remove (at least 6 characters)
+        session_id: Limit message redaction to one session (optional)
+        confirm: False (default) = dry run, only counts; True = redact
+    """
+    from .redact import RedactError, redact
+    from .workstreams import get_data_dir
+
+    data_dir = get_data_dir()
+    db_path = _get_db_path(ctx) if ctx is not None else None
+    try:
+        result = redact(data_dir, db_path, text, session_id=session_id, dry_run=not confirm)
+    except RedactError as exc:
+        return {"error": str(exc)}
+
+    lines = []
+    if not confirm:
+        lines.append(
+            f"Dry run: {result['messages']} message(s) and {result['events']} event-log entr(ies) contain that text. "
+            "Call again with confirm=True to redact."
+        )
+    else:
+        lines.append(
+            f"Redacted {result['messages']} message(s), {result['hints']} hint(s), {result['events']} event-log "
+            f"entr(ies) and {len(result.get('files', []))} file(s)."
+        )
+        from .sync import is_sync_enabled
+
+        if is_sync_enabled(data_dir) and (result["messages"] or result["events"]):
+            try:
+                from .sync_engine import reseal_own_batches
+
+                n = reseal_own_batches(data_dir, db_path)
+                lines.append(
+                    f"Sync: rewrote this machine's shared-folder batches ({n} file(s)); other machines apply "
+                    "the redaction and rewrite theirs on their next sync."
+                )
+            except Exception as exc:  # SyncError, or FolderError on a tampered folder
+                lines.append(f"Sync: couldn't rewrite the shared folder ({exc}).")
+    if result["transcripts"]:
+        lines.append(
+            "Claude Code's own transcripts on this machine still contain it (relay doesn't edit them); "
+            "consider removing it there too:\n" + "\n".join(f"- `{p}`" for p in result["transcripts"])
+        )
+    if result.get("backups"):
+        lines.append("relay backups that still contain it:\n" + "\n".join(f"- `{p}`" for p in result["backups"]))
+    return "\n\n".join(lines)

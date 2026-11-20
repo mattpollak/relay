@@ -24,7 +24,7 @@ def db_path(tmp_path):
         ("s4", "/home/test/project", "test-conversation", "2026-01-01T13:00:00Z", "2026-01-01T13:30:00Z", 3, "main", "/home/test/project"),
     ]
     conn.executemany(
-        "INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?)", sessions
+        "INSERT INTO sessions (session_id, project_dir, slug, first_timestamp, last_timestamp, message_count, git_branch, cwd) VALUES (?,?,?,?,?,?,?,?)", sessions
     )
 
     # 3 messages per session
@@ -147,7 +147,7 @@ class TestSearchHistorySessionNumber:
         """Sessions without a slug chain get session_number=1."""
         conn = get_connection(db_path)
         conn.execute(
-            "INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO sessions (session_id, project_dir, slug, first_timestamp, last_timestamp, message_count, git_branch, cwd) VALUES (?,?,?,?,?,?,?,?)",
             ("solo", "/home/test/project", "solo-slug", "2026-02-01T10:00:00Z", "2026-02-01T10:30:00Z", 1, "main", "/"),
         )
         conn.execute(

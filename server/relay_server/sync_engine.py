@@ -18,15 +18,11 @@ from typing import Any
 
 from .events import EVENTS_DB, EventStore, _reconcile, get_hostname
 from .sync_apply import apply_remote, event_rows
-from .sync_folder import safe_name
+from .sync_folder import SyncError, safe_name  # noqa: F401 (SyncError re-exported)
 
 BATCH_SIZE = 1000
 NOTICES_FILE = "sync-notices.json"
 _SERVER_DIR = Path(__file__).resolve().parent.parent
-
-
-class SyncError(Exception):
-    """A sync operation can't run; the message is meant for the user."""
 
 
 def _now() -> str:
@@ -69,6 +65,37 @@ def _ensure_tables(store: EventStore) -> None:
     store.conn.execute(
         "CREATE TABLE IF NOT EXISTS sync_seen (path TEXT PRIMARY KEY, status TEXT NOT NULL, at TEXT NOT NULL)"
     )
+    store.conn.execute(
+        "CREATE TABLE IF NOT EXISTS sync_written (name TEXT PRIMARY KEY, sha256 TEXT NOT NULL, at TEXT NOT NULL)"
+    )
+
+
+class _DbManifest:
+    """The files this machine wrote to the shared folder (events.db), so it
+    only ever deletes its own, unchanged files."""
+
+    def __init__(self, store: EventStore):
+        self.store = store
+
+    def record(self, name: str, sha256: str) -> None:
+        self.store.conn.execute(
+            "INSERT OR REPLACE INTO sync_written (name, sha256, at) VALUES (?, ?, ?)", (name, sha256, _now())
+        )
+
+    def lookup(self, name: str) -> str | None:
+        row = self.store.conn.execute("SELECT sha256 FROM sync_written WHERE name = ?", (name,)).fetchone()
+        return row[0] if row else None
+
+    def forget(self, name: str) -> None:
+        self.store.conn.execute("DELETE FROM sync_written WHERE name = ?", (name,))
+
+    def names(self) -> list[str]:
+        return [r[0] for r in self.store.conn.execute("SELECT name FROM sync_written ORDER BY name")]
+
+
+def _attach(store: EventStore, folder: Any) -> None:
+    _ensure_tables(store)
+    folder.manifest = _DbManifest(store)
 
 
 def _meta_json(store: EventStore, k: str, default: Any = None) -> Any:
@@ -89,6 +116,7 @@ def _reset_folder_state(store: EventStore) -> None:
     for k in ("sync_pin", "sync_accepted", "sync_records", "sync_pushed", "sync_recipients"):
         store.conn.execute("DELETE FROM meta WHERE k = ?", (k,))
     store.conn.execute("DELETE FROM sync_seen")
+    store.conn.execute("DELETE FROM sync_written")
 
 
 class _Ctx:
@@ -213,7 +241,7 @@ def join_folder(
         raise SyncConfigError(str(exc)) from exc
 
     with EventStore(data_dir) as store, store.transaction():
-        _ensure_tables(store)
+        _attach(store, folder)
         pin = _meta_json(store, "sync_pin")
         if pin and pin.get("folder") != folder_path:
             _reset_folder_state(store)
@@ -349,6 +377,23 @@ def record_git_snapshots(store: EventStore, data_dir: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
+MAX_BATCH_BYTES = 4 * 1024 * 1024
+
+
+def _chunks(events: list[dict]):
+    """Split events into batches of at most BATCH_SIZE events / ~4 MB."""
+    chunk, size = [], 0
+    for e in events:
+        n = len(json.dumps(e["payload"], ensure_ascii=False)) + 200
+        if chunk and (len(chunk) >= BATCH_SIZE or size + n > MAX_BATCH_BYTES):
+            yield chunk
+            chunk, size = [], 0
+        chunk.append(e)
+        size += n
+    if chunk:
+        yield chunk
+
+
 def _wire(row: dict) -> dict:
     return {k: row[k] for k in ("id", "host_id", "type", "schema", "key", "parent", "wall_ts", "source", "payload")}
 
@@ -356,7 +401,7 @@ def _wire(row: dict) -> dict:
 def push(data_dir: Path, db_path: Path | None) -> dict:
     ctx = _open(data_dir, db_path)
     with EventStore(data_dir) as store, store.transaction():
-        _ensure_tables(store)
+        _attach(store, ctx.folder)
         me = store.host["host_id"]
         mem = _membership(store, ctx)
         if mem["error"]:
@@ -372,6 +417,11 @@ def push(data_dir: Path, db_path: Path | None) -> dict:
 
         _reconcile(store, ctx.data_dir, db_path, source="sync")
         snapshots = record_git_snapshots(store, ctx.data_dir)
+        packed = 0
+        if ctx.block.get("scope") == "state+messages":
+            from .sync_messages import pack_new_messages
+
+            packed = pack_new_messages(store, db_path)
 
         recipients = {hid: m["key"] for hid, m in mem["members"].items()}
         previous = set(_meta_json(store, "sync_recipients", []))
@@ -387,10 +437,9 @@ def push(data_dir: Path, db_path: Path | None) -> dict:
         else:
             events, suffix = own_new, ""
         written = []
-        for i in range(0, len(events), BATCH_SIZE):
-            chunk = [_wire(e) for e in events[i : i + BATCH_SIZE]]
+        for n, chunk in enumerate(_chunks([_wire(e) for e in events])):
             envelope = ctx.sc.seal_batch(ctx.key, me, chunk, recipients, created=_now())
-            written.append(ctx.folder.write_batch(me, envelope, suffix if i == 0 else f"{suffix}-{i}"))
+            written.append(ctx.folder.write_batch(me, envelope, suffix if n == 0 else f"{suffix}-{n}"))
         if own_new:
             store.set_meta("sync_pushed", own_new[-1]["id"])
         _set_meta_json(store, "sync_recipients", sorted(recipients))
@@ -398,14 +447,14 @@ def push(data_dir: Path, db_path: Path | None) -> dict:
         _note(store, "sync_last_error", None)
         return {
             "ok": True, "role": role, "batches": len(written), "events": len(events),
-            "git_snapshots": snapshots, "history_for": added,
+            "git_snapshots": snapshots, "history_for": added, "messages": packed,
         }
 
 
 def pull(data_dir: Path, db_path: Path | None) -> dict:
     ctx = _open(data_dir, db_path)
     with EventStore(data_dir) as store, store.transaction():
-        _ensure_tables(store)
+        _attach(store, ctx.folder)
         me = store.host["host_id"]
         mem = _membership(store, ctx)
         if mem["error"]:
@@ -415,6 +464,8 @@ def pull(data_dir: Path, db_path: Path | None) -> dict:
         if role in ("revoked", "key-mismatch"):
             return {"ok": False, "role": role, "error": f"this machine is {role}; not pulling"}
 
+        if role == "member":
+            ctx.folder.remove_own_request(me)  # approved: the join request has done its job
         _reconcile(store, ctx.data_dir, db_path, source="sync")
         seen = {r[0] for r in store.conn.execute("SELECT path FROM sync_seen")}
         stats = {"batches": 0, "waiting": 0, "incomplete": 0, "rejected": 0, "not_for_me": 0}
@@ -458,8 +509,38 @@ def pull(data_dir: Path, db_path: Path | None) -> dict:
         store.set_meta("sync_last_pull", _now())
         _note(store, "sync_last_error", None)
     result = {"ok": True, "role": role, **stats, **applied}
+    if applied.get("redactions") and role == "member":
+        # Old ciphertext from this machine may contain the redacted text.
+        result["resealed"] = reseal_own_batches(data_dir, db_path)
     write_notices(Path(data_dir))
     return result
+
+
+def reseal_own_batches(data_dir: Path, db_path: Path | None) -> int:
+    """Replace every batch file this machine wrote with fresh ones built from
+    its (scrubbed) event log, then delete the old files. Returns files written."""
+    ctx = _open(data_dir, db_path)
+    with EventStore(data_dir) as store, store.transaction():
+        _attach(store, ctx.folder)
+        me = store.host["host_id"]
+        mem = _membership(store, ctx)
+        if mem["error"] or _role(mem, me, ctx.key.public_b64) != "member":
+            return 0
+        old_files = ctx.folder.own_batches(me)
+        events = event_rows(store, "WHERE host_id = ?", (me,))
+        recipients = {hid: m["key"] for hid, m in mem["members"].items()}
+        tag = f"-r{_now().replace(':', '').replace('-', '')}"
+        written = []
+        for n, chunk in enumerate(_chunks([_wire(e) for e in events])):
+            envelope = ctx.sc.seal_batch(ctx.key, me, chunk, recipients, created=_now())
+            written.append(ctx.folder.write_batch(me, envelope, f"{tag}-{n}"))
+        for name in old_files:
+            if name not in written:
+                ctx.folder.delete_own(name)  # only if unchanged since this machine wrote it
+        if events:
+            store.set_meta("sync_pushed", events[-1]["id"])
+        _set_meta_json(store, "sync_recipients", sorted(recipients))
+        return len(written)
 
 
 def sync_now(data_dir: Path, db_path: Path | None) -> dict:
@@ -498,7 +579,7 @@ def pending_requests(store: EventStore, ctx: _Ctx, mem: dict) -> list[dict]:
 def approve(data_dir: Path, db_path: Path | None, who: str) -> dict:
     ctx = _open(data_dir, db_path)
     with EventStore(data_dir) as store, store.transaction():
-        _ensure_tables(store)
+        _attach(store, ctx.folder)
         me = store.host["host_id"]
         mem = _membership(store, ctx)
         if mem["error"]:
@@ -514,7 +595,6 @@ def approve(data_dir: Path, db_path: Path | None, who: str) -> dict:
             raise SyncError(f"{'no' if not matches else 'more than one'} waiting machine matches {who!r}; waiting: {names}")
         req = matches[0]
         ctx.folder.write_membership(ctx.key, "approve", me, req["host_id"], req["key"], req["name"])
-        ctx.folder.remove_request(req["host_id"])
         _membership(store, ctx)  # accept the new record
     pushed = push(data_dir, db_path)  # sends the full history to the new machine
     return {"approved": req, "push": pushed}
@@ -523,7 +603,7 @@ def approve(data_dir: Path, db_path: Path | None, who: str) -> dict:
 def revoke(data_dir: Path, db_path: Path | None, who: str) -> dict:
     ctx = _open(data_dir, db_path)
     with EventStore(data_dir) as store, store.transaction():
-        _ensure_tables(store)
+        _attach(store, ctx.folder)
         me = store.host["host_id"]
         mem = _membership(store, ctx)
         if mem["error"]:
@@ -538,7 +618,6 @@ def revoke(data_dir: Path, db_path: Path | None, who: str) -> dict:
             raise SyncError(f"{'no' if not matches else 'more than one'} other machine matches {who!r}; machines: {names}")
         target = matches[0]
         ctx.folder.write_membership(ctx.key, "revoke", me, target["host_id"], None, target["name"])
-        ctx.folder.remove_request(target["host_id"])
         _membership(store, ctx)
     return {"revoked": target}
 
@@ -553,7 +632,7 @@ def details(data_dir: Path) -> dict:
     Read-mostly: doesn't record anything new."""
     ctx = _open(data_dir, None)
     with EventStore(data_dir) as store:
-        _ensure_tables(store)
+        _attach(store, ctx.folder)
         me = store.host["host_id"] if store.host else _own_id(data_dir)
         mem = _membership(store, ctx, persist=False)
         out: dict[str, Any] = {

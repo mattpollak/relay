@@ -90,6 +90,8 @@ def format_conversation(sessions: list[dict], messages: list[dict]) -> str:
         lines.append(f"## {slug}")
 
     meta_parts = []
+    if sessions[0].get("host"):
+        meta_parts.append(f"**Machine:** {sessions[0]['host']}")
     if project:
         meta_parts.append(f"**Project:** {project}")
     if branch:

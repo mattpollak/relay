@@ -240,6 +240,12 @@ def setup_sync(
             raise
         except SyncError as exc:
             raise SyncConfigError(str(exc)) from exc
+        except Exception as exc:
+            from .sync_folder import FolderError
+
+            if isinstance(exc, FolderError):
+                raise SyncConfigError(str(exc)) from exc
+            raise
         config = _read_config(data_dir)  # re-read: joining may have touched relay.json
     previous = config.get("sync") if isinstance(config.get("sync"), dict) else {}
     block["configured_at"] = _utc_now()
@@ -401,7 +407,7 @@ def format_status(status: dict) -> str:
         scope_text = (
             "workstreams, state, ideas, hints, tags, git snapshots"
             if scope == "state"
-            else "workstreams, state, ideas, hints, tags, git snapshots + conversation messages (messages not available yet)"
+            else "workstreams, state, ideas, hints, tags, git snapshots + conversation messages"
         )
         lines.append(f"**Shares:** {scope_text}")
     if state == "on" and not status["transport_available"]:
@@ -538,9 +544,11 @@ def run_sync(direction: str, data_dir: Path | None = None, db_path: Path | None 
 
         db_path = get_db_path()
     fn = {"push": sync_engine.push, "pull": sync_engine.pull, "now": sync_engine.sync_now}[direction]
+    from .sync_folder import FolderError
+
     try:
         return {"ran": True, **fn(data_dir, db_path)}
-    except sync_engine.SyncError as exc:
+    except (sync_engine.SyncError, FolderError) as exc:
         return {"ran": False, "reason": "error", "error": str(exc)}
 
 

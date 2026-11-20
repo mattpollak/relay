@@ -20,7 +20,9 @@ WRITE_NON_IDEMPOTENT_TOOLS = {
     "manage_idea", "manage_worktree", "manage_sync",
 }
 
-ALL_TOOLS = READ_ONLY_TOOLS | WRITE_IDEMPOTENT_TOOLS | WRITE_NON_IDEMPOTENT_TOOLS
+DESTRUCTIVE_TOOLS = {"redact_history"}
+
+ALL_TOOLS = READ_ONLY_TOOLS | WRITE_IDEMPOTENT_TOOLS | WRITE_NON_IDEMPOTENT_TOOLS | DESTRUCTIVE_TOOLS
 
 
 def _get_tool_annotations() -> dict[str, ToolAnnotations | None]:
@@ -69,9 +71,10 @@ def test_write_non_idempotent_tools():
 
 
 def test_no_tools_are_destructive():
+    """Only redaction (which permanently removes text) is destructive."""
     annotations = _get_tool_annotations()
     for name, ann in annotations.items():
-        if ann is not None:
+        if ann is not None and name not in DESTRUCTIVE_TOOLS:
             assert ann.destructiveHint is False, f"{name} should not be destructive"
 
 
@@ -80,3 +83,9 @@ def test_no_tools_are_open_world():
     for name, ann in annotations.items():
         if ann is not None:
             assert ann.openWorldHint is False, f"{name} should not be openWorld"
+
+
+def test_destructive_tools():
+    annotations = _get_tool_annotations()
+    for name in DESTRUCTIVE_TOOLS:
+        assert annotations[name].destructiveHint is True
