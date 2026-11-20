@@ -948,3 +948,48 @@ def test_snapshot_waits_until_other_members_are_pulled(pair, folder, monkeypatch
     a.pull()
     res = a.push()
     assert res["snapshot"] == "compact" and res["snapshot_deferred"] is None
+
+
+# ---------------------------------------------------------------------------
+# Joining with data that existed before sync (both machines imported on their own)
+# ---------------------------------------------------------------------------
+
+
+def _preexisting(host: Host, states: dict[str, str]) -> None:
+    """Give a host data that existed before relay's event log, then import it."""
+    for p in host.data_dir.glob("events.db*"):
+        p.unlink()
+    reg = {"version": 1, "workstreams": {ws: {"status": "active", "description": ws} for ws in states}}
+    (host.data_dir / "workstreams.json").write_text(json.dumps(reg))
+    for ws, text in states.items():
+        d = host.data_dir / "workstreams" / ws
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "state.md").write_text(text)
+    assert ensure_event_log(host.data_dir, host.db_path)["status"] == "migrated"
+
+
+def test_join_keeps_real_edits_over_a_later_import(a, b, folder):
+    _preexisting(a, {"proj": "# proj\n\nold\n", "other": "# other\n\nlaptop copy\n"})
+    a.write_state("proj", "# proj\n\nlaptop, edited today\n")  # a real edit after the import
+    # The desktop starts relay (and imports) later, with stale copies:
+    _preexisting(b, {"proj": "# proj\n\ndesk, stale\n", "other": "# other\n\ndesk copy\n", "deskonly": "# d\n"})
+
+    a.setup(folder)
+    a.push()
+    b.setup(folder, trust=a)
+    sync_engine.approve(a.data_dir, a.db_path, "desk")
+    b.pull()
+    b.push()
+    a.pull()
+
+    # The real edit wins on both machines; the stale import is kept for review.
+    assert a.state("proj") == b.state("proj") == "# proj\n\nlaptop, edited today\n"
+    assert any("desk, stale" in Path(p).read_text() for p in sync_engine.conflict_files(b.data_dir, "proj"))
+    # Only imports on both sides: the later one wins, the other is kept as a conflict file.
+    assert a.state("other") == b.state("other")
+    other_conflicts = sync_engine.conflict_files(a.data_dir, "other") + sync_engine.conflict_files(b.data_dir, "other")
+    assert other_conflicts
+    # Data only one machine had arrives on the other.
+    assert (a.data_dir / "workstreams" / "deskonly" / "state.md").exists()
+    assert _shared_keys(a.heads()) == _shared_keys(b.heads())
+    assert a.fold_ok() and b.fold_ok()

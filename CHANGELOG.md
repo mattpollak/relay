@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.20.1] - 2026-11-20
+
+### Fixed
+- **Joining with existing data no longer buries newer work.** Each machine's one-time import snapshot (taken when it first started relay with the event log) now always loses to real edits from any machine. Before, a machine that started relay later and then joined sync would win with its older imported copies, and the newer work survived only as conflict files. Where both sides have only imports, the later one wins and the other is kept as a conflict file, as before. All machines need 0.20.1 or later.
+
 ## [0.20.0] - 2026-11-20
 
 ### Added

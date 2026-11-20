@@ -218,6 +218,18 @@ def ensure_host_identity(data_dir: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
+IMPORT_SOURCE = "import"
+
+
+def fold_order(ev: Any) -> tuple[int, str]:
+    """Order in which a key's events are folded: the one-time import snapshot
+    (taken when a machine first started relay with the event log) before every
+    real edit, then by event ID. So when a machine joins sync, its older
+    imported copy can't override edits made since on another machine just
+    because it was imported later. Every machine uses the same order."""
+    return (0 if ev["source"] == IMPORT_SOURCE else 1, ev["id"])
+
+
 def apply_event(current: Any, event_type: str, payload: dict) -> Any:
     """Fold one event onto the current value of its key. None = deleted."""
     if event_type.endswith(".delete"):
@@ -375,10 +387,10 @@ class EventStore:
         return self.conn.execute("SELECT * FROM events ORDER BY id").fetchall()
 
     def fold(self) -> dict[str, tuple[str, str | None]]:
-        """Rebuild heads from the full log (for verification)."""
+        """Rebuild heads from the full log (for verification), in fold order."""
         values: dict[str, Any] = {}
         last: dict[str, str] = {}
-        for ev in self.events():
+        for ev in sorted(self.events(), key=fold_order):
             values[ev["key"]] = apply_event(values.get(ev["key"]), ev["type"], json.loads(ev["payload"]))
             last[ev["key"]] = ev["id"]
         return {

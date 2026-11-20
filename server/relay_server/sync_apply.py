@@ -121,7 +121,9 @@ def refold(store: EventStore, key: str) -> tuple[str | None, Any]:
     value: Any = None
     last: str | None = None
     for r in store.conn.execute(
-        "SELECT id, type, schema, payload FROM events WHERE key = ? ORDER BY id", (key,)
+        # same order as events.fold_order: import snapshots first, then by ID
+        "SELECT id, type, schema, payload FROM events WHERE key = ? "
+        "ORDER BY CASE WHEN source = 'import' THEN 0 ELSE 1 END, id", (key,)
     ):
         if _foldable(r["type"], r["schema"]):
             value = apply_event(value, r["type"], json.loads(r["payload"]))
