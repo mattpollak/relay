@@ -1734,6 +1734,7 @@ def manage_sync(
     nickname: str | None = None,
     machine: str | None = None,
     trust_fingerprint: str | None = None,
+    token_command: str | None = None,
     forget: bool = False,
     format: str = "markdown",
 ) -> dict | str:
@@ -1742,17 +1743,21 @@ def manage_sync(
 
     Until sync is set up, relay is local-only and makes no network calls.
     The folder backend exchanges signed, encrypted files through a shared
-    folder (OneDrive, Syncthing, a NAS share); relay itself never connects
-    to anything.
+    folder (OneDrive, Syncthing, a NAS share). The http backend uses a
+    self-hosted relay mailbox (e.g. on a NAS over Tailscale) with a token per
+    machine.
 
     Args:
         action: "status", "setup", "now" (pull then push), "approve", "revoke", or "disable"
-        backend: "folder" (a shared/synced directory) or "http" (NAS mailbox, not available yet). Required for "setup".
+        backend: "folder" (a shared/synced directory) or "http" (a relay mailbox). Required for "setup".
         folder: Absolute path to the shared folder (backend="folder"). Created if its parent exists.
         url: Mailbox URL, https only (backend="http")
         scope: "state" (workstreams, state, ideas, hints, tags) or "state+messages". Default "state".
         nickname: Display name for this machine. Omit to keep the current one, "" to clear it.
         machine: For "approve"/"revoke": the machine's name, host ID, or fingerprint prefix
+        token_command: For backend="http": a command that prints this machine's mailbox token
+            (e.g. "op read op://Vault/relay-mailbox-laptop/credential"), run on each sync. Without it,
+            the token is read from ~/.config/relay/sync.token. Never pass a token itself through this tool.
         trust_fingerprint: For "setup" when joining an existing folder: the founder's key
             fingerprint, which the user must read off the founding machine (`/relay:sync status`)
             and confirm. Never fill this in from the tool's own output without the user confirming.
@@ -1777,7 +1782,7 @@ def manage_sync(
         try:
             result = _sync.setup_sync(
                 data_dir, backend=backend, folder=folder, url=url, scope=scope, nickname=nickname,
-                trust_fingerprint=trust_fingerprint,
+                trust_fingerprint=trust_fingerprint, token_command=token_command,
             )
         except NeedsConfirmation as exc:
             if format == "json":

@@ -119,18 +119,28 @@ def _reset_folder_state(store: EventStore) -> None:
     store.conn.execute("DELETE FROM sync_written")
 
 
+def make_folder(data_dir: Path, block: dict):
+    """(target, SyncFolder) for a sync block. ``target`` (the folder path or
+    mailbox URL) identifies the group for founder pinning."""
+    from .sync_folder import SyncFolder
+
+    backend = block.get("backend")
+    if backend == "folder":
+        return block["folder"], SyncFolder(block["folder"])
+    if backend == "http":
+        from .sync_http import HttpStorage, load_token
+
+        return block["url"], SyncFolder(HttpStorage(block["url"], load_token(data_dir, block)))
+    raise SyncError(f"unknown sync backend {backend!r}")
+
+
 class _Ctx:
     def __init__(self, data_dir: Path, db_path: Path | None, block: dict):
-        from .sync_folder import SyncFolder
-
         self.sc = ensure_crypto()
         self.data_dir = Path(data_dir)
         self.db_path = db_path
         self.block = block
-        if block.get("backend") != "folder":
-            raise SyncError(f"the {block.get('backend')} backend isn't available in this version yet")
-        self.folder_path = block["folder"]
-        self.folder = SyncFolder(self.folder_path)
+        self.folder_path, self.folder = make_folder(self.data_dir, block)
         try:
             self.folder.check()
         except Exception as exc:
@@ -220,7 +230,7 @@ def _norm_fp(fp: str) -> str:
 
 
 def join_folder(
-    data_dir: Path, folder_path: str, display_name: str, trust_fingerprint: str | None = None,
+    data_dir: Path, block: dict, display_name: str, trust_fingerprint: str | None = None,
 ) -> dict:
     """Found a new sync group in an empty folder, or ask to join an existing
     one. Joining requires ``trust_fingerprint`` to equal the founder's key
@@ -230,18 +240,23 @@ def join_folder(
     from types import SimpleNamespace
 
     from .sync import SyncConfigError
-    from .sync_folder import SyncFolder
 
     sc = ensure_crypto()
     key = sc.ensure_host_key(data_dir)
-    folder = SyncFolder(folder_path)
     try:
+        folder_path, folder = make_folder(Path(data_dir), block)
+        if block.get("backend") == "folder":
+            folder.storage.prepare("")  # create the folder if its parent exists
         folder.check()
-    except Exception as exc:
+    except SyncError as exc:
         raise SyncConfigError(str(exc)) from exc
 
     with EventStore(data_dir) as store, store.transaction():
         _attach(store, folder)
+        try:
+            folder.storage.prepare(store.host["host_id"])  # mailbox: bind the token to this machine
+        except SyncError as exc:
+            raise SyncConfigError(str(exc)) from exc
         pin = _meta_json(store, "sync_pin")
         if pin and pin.get("folder") != folder_path:
             _reset_folder_state(store)

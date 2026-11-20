@@ -40,7 +40,7 @@ DEFAULT_SCOPE = "state"
 
 # Backends that can actually move events in this version. Config for the
 # others is accepted and validated, but nothing is sent.
-IMPLEMENTED_BACKENDS: tuple[str, ...] = ("folder",)
+IMPLEMENTED_BACKENDS: tuple[str, ...] = ("folder", "http")
 
 _NOT_SET_UP = "Sync isn't set up; relay is running local-only. Run `/relay:sync setup` to share with other machines."
 _MAX_NICKNAME = 32
@@ -198,6 +198,8 @@ def setup_sync(
     scope: str = DEFAULT_SCOPE,
     nickname: str | None = None,
     trust_fingerprint: str | None = None,
+    token: str | None = None,
+    token_command: str | None = None,
 ) -> dict:
     """Enable sync with validated settings. Doesn't contact anything.
 
@@ -213,12 +215,19 @@ def setup_sync(
     if scope not in SCOPES:
         raise SyncConfigError(f"scope must be one of {', '.join(SCOPES)}")
 
+    clean_nickname = _validate_nickname(nickname) if nickname is not None else None
     block: dict[str, Any] = {"enabled": True, "backend": backend, "scope": scope}
     if backend == "folder":
         block["folder"] = _validate_folder(folder, data_dir)
     else:
         block["url"] = _validate_url(url)
-    clean_nickname = _validate_nickname(nickname) if nickname is not None else None
+        if token_command:
+            block["token_command"] = token_command.strip()
+        elif token:
+            if any(ch.isspace() for ch in token.strip()) or len(token.strip()) < 16:
+                raise SyncConfigError("that doesn't look like a mailbox token")
+        elif not (data_dir / "sync.token").exists():
+            raise SyncConfigError("backend 'http' needs the mailbox token for this machine (token or token_command)")
 
     # Host identity must exist before anything can be synced.
     from .events import ensure_host_identity
@@ -230,12 +239,17 @@ def setup_sync(
     else:
         display_name = host["display_name"]
 
+    if backend == "http" and token and not token_command:
+        from .sync_http import save_token
+
+        save_token(data_dir, token)
+
     join = None
     if backend in IMPLEMENTED_BACKENDS:
         from .sync_engine import NeedsConfirmation, SyncError, join_folder
 
         try:
-            join = join_folder(data_dir, block["folder"], display_name, trust_fingerprint)
+            join = join_folder(data_dir, block, display_name, trust_fingerprint)
         except NeedsConfirmation:
             raise
         except SyncError as exc:
@@ -251,7 +265,7 @@ def setup_sync(
     block["configured_at"] = _utc_now()
     # Keep fields later steps add (keys, cursors) when re-running setup.
     config["sync"] = {**previous, **block}
-    for stale in ("folder", "url"):
+    for stale in ("folder", "url", "token_command"):
         if stale not in block:
             config["sync"].pop(stale, None)
     if clean_nickname is not None:

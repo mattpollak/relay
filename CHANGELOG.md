@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.19.0] - 2026-11-20
+
+### Added
+- **Relay mailbox (`backend: http`)** — Sync through a small self-hosted server instead of a shared folder, so machines can sync from anywhere (e.g. a NAS reachable over Tailscale). The mailbox lives in `mailbox/`: Python standard library only, Dockerfile and a compose example with a Tailscale sidecar (HTTPS on your tailnet, not reachable from the LAN or internet). It stores only the signed, encrypted files relay already writes and enforces the folder rules itself: one token per machine (stored hashed), bound to that machine's host ID, which can only create or delete its own files; files are create-only; no token, no access.
+- **Mailbox tokens on the client** — `~/.config/relay/sync.token` (0600), or `token_command` (e.g. `op read op://…`) run on each sync. `/relay:sync setup` steers away from pasting tokens into the chat.
+- **Hardening** — The client refuses HTTP redirects (urllib would otherwise forward the token to the redirect target, even over plain http). A revoked token's host ID stays reserved, so a new token can't take over that machine's files; re-issue access with `relay-mailbox add-token <label> --host <host_id>`. The compose example runs Tailscale in kernel mode so only `tailscale serve` on 443 is reachable over the tailnet.
+
+### Changed
+- The sync layout and rules now sit on a small storage interface (list / read / create / delete) shared by the folder and mailbox backends.
+
 ## [0.18.0] - 2026-11-20
 
 ### Added

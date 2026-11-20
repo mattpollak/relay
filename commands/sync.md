@@ -7,7 +7,7 @@ argument-hint: "[status | setup | now | approve <machine> | revoke <machine> | d
 
 Multi-machine sync is **optional and off by default**. Until it's set up, relay is local-only: no keys, no shared folder, nothing extra runs.
 
-With sync on, relay shares workstreams, state files, ideas, session hints and tags with your other machines through a **shared folder** (OneDrive, Syncthing, a NAS share — anything that syncs files). Everything relay writes there is encrypted to your approved machines and signed by the machine that wrote it; the folder's host can't read it. Relay itself never connects to the network.
+With sync on, relay shares workstreams, state files, ideas, session hints and tags with your other machines through a **shared folder** (OneDrive, Syncthing, a NAS share) or a self-hosted **relay mailbox** (e.g. on a NAS over Tailscale). Everything relay writes is encrypted to your approved machines and signed by the machine that wrote it; the folder's host or the mailbox can't read it.
 
 The subcommand is `$ARGUMENTS` (empty means `status`).
 
@@ -27,7 +27,9 @@ Walk the user through it, one question at a time.
    - The first machine set up in an empty folder **founds** the group.
    - Later machines **ask to join** and get nothing until an existing machine approves them.
 
-   (The `http` backend — a self-hosted mailbox on a NAS — isn't available yet.)
+   **Or a relay mailbox (`http`)** — for machines that aren't always on the same network. Ask for its URL (`https://…`, e.g. `https://relay-mailbox.<tailnet>.ts.net`). Each machine needs **its own token** from whoever runs the mailbox (`relay-mailbox add-token <machine>`). **Never ask the user to paste the token into the chat** — it would end up in the transcript and the search index. Instead, one of:
+   - the user writes it to a file themselves, e.g. `! op read "op://Vault/relay-mailbox-<machine>/credential" > ~/.config/relay/sync.token && chmod 600 ~/.config/relay/sync.token` (the `!` runs it in this session without showing the token), then setup with no token argument; or
+   - `token_command="op read op://Vault/relay-mailbox-<machine>/credential"` so relay asks the password manager on every sync (may prompt for approval).
 
 4. **Scope.** Ask what to share:
    - **state** (recommended): workstreams, state files, ideas, session hints, tags, and git snapshots (uncommitted/unpushed work per repo).
@@ -36,6 +38,7 @@ Walk the user through it, one question at a time.
 5. **Save.** Call:
    ```
    manage_sync(action="setup", backend="folder", folder="<path>", scope="<state|state+messages>", nickname="<name, or \"\" for the hostname>")
+   manage_sync(action="setup", backend="http", url="<https url>", [token_command="<cmd>"], scope=..., nickname=...)
    ```
    The first run on a machine may take a moment: it installs relay's encryption library (PyNaCl) into relay's own environment.
    If it returns `{"error": ...}`, explain the problem and ask for a corrected value. Don't retry with a guessed value.

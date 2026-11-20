@@ -301,7 +301,7 @@ The file is optional — relay works fine without it. Missing or malformed files
 
 ## Multi-machine sync (optional)
 
-Off by default. If you use relay on more than one computer, sync shares workstreams, state files, ideas, session hints, tags and git snapshots between them through a **shared folder** — OneDrive, Syncthing, a NAS share, anything that syncs files. Run `/relay:sync setup` on each machine (or the sync step of `/relay:setup-relay`).
+Off by default. If you use relay on more than one computer, sync shares workstreams, state files, ideas, session hints, tags and git snapshots between them through a **shared folder** — OneDrive, Syncthing, a NAS share, anything that syncs files — or a self-hosted **[relay mailbox](mailbox/README.md)** (tiny, dependency-free; e.g. on a NAS behind Tailscale, so it works away from home). Run `/relay:sync setup` on each machine (or the sync step of `/relay:setup-relay`).
 
 - **Local-only stays fully supported.** Without setup, nothing below happens: no keys, no extra dependency, no background work.
 - **Encrypted and signed.** Each machine has its own key. Everything written to the folder is compressed, encrypted to the approved machines, and signed by the machine that wrote it, so the folder's host (Microsoft, your NAS) can't read or alter it. Uses [PyNaCl](https://pynacl.readthedocs.io/) (libsodium), installed into relay's own environment the first time you set up sync.
@@ -313,8 +313,7 @@ Off by default. If you use relay on more than one computer, sync shares workstre
 
 - **Cross-machine search (opt-in).** With scope `state+messages`, the messages relay indexes from each machine's transcripts are shared too, so `search_history`, `get_conversation`, `list_sessions` and summaries cover every machine; results from another machine say which one. Raw transcripts never leave the machine.
 - **Redaction.** `/relay:redact <text>` removes a leaked secret from relay's index, hints, event log and files, and — with sync on — from every machine and the shared folder's encrypted files. The secret itself is never sent; other machines only accept scrubbed versions that remove text. Claude Code's own transcripts aren't touched; relay lists the ones that still contain it.
-
-Not yet available: the NAS mailbox (`http`) backend.
+- **Mailbox tokens.** One per machine, bound to that machine on first use; the mailbox lets each machine create or delete only its own files and rejects anything without a valid token. Store the token in `~/.config/relay/sync.token` (0600) or set a `token_command` (e.g. `op read …`).
 
 ## How It Works
 

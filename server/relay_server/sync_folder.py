@@ -114,12 +114,14 @@ _NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 
 
-class SyncFolder:
-    def __init__(self, root: Path | str, manifest: Manifest | None = None):
-        self.root = Path(root)
-        self.manifest: Manifest = manifest if manifest is not None else MemoryManifest()
+class LocalStorage:
+    """A directory on this machine (OneDrive, Syncthing, a mounted share)."""
 
-    # -- low-level I/O (never follows links) ------------------------------
+    def __init__(self, root: Path | str):
+        self.root = Path(root)
+
+    def describe(self) -> str:
+        return str(self.root)
 
     def _open_root(self) -> int:
         try:
@@ -132,14 +134,20 @@ class SyncFolder:
             raise FolderError(f"sync folder {self.root} isn't a directory")
         return os.open(self.root, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
 
-    def _names(self) -> list[str]:
+    def check(self) -> None:
+        os.close(self._open_root())
+
+    def prepare(self, host_id: str) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def names(self) -> list[str]:
         fd = self._open_root()
         try:
             return sorted(os.listdir(fd))
         finally:
             os.close(fd)
 
-    def _read_bytes(self, name: str) -> bytes | None:
+    def read(self, name: str) -> bytes | None:
         """Contents of a regular file directly in the folder, else None."""
         dfd = self._open_root()
         try:
@@ -166,20 +174,8 @@ class SyncFolder:
         finally:
             os.close(dfd)
 
-    def _read_json(self, name: str) -> Any:
-        raw = self._read_bytes(name)
-        if raw is None:
-            return None
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return None
-
-    def _create(self, name: str, data: dict) -> str:
-        """Create a new file; never overwrites anything. Returns its name."""
-        if "/" in name or name.startswith("."):
-            raise FolderError(f"bad file name {name!r}")
-        body = (json.dumps(data, indent=1) + "\n").encode()
+    def create(self, name: str, body: bytes) -> None:
+        """Create a new file; never overwrites anything."""
         dfd = self._open_root()
         tmp = f".{name}.{secrets.token_hex(6)}.tmp"
         try:
@@ -201,6 +197,49 @@ class SyncFolder:
             raise FolderError(f"couldn't create {name}: {exc}") from exc
         finally:
             os.close(dfd)
+
+    def delete(self, name: str) -> None:
+        dfd = self._open_root()
+        try:
+            os.unlink(name, dir_fd=dfd)  # removes the name itself; never follows a link
+        except FileNotFoundError:
+            pass
+        finally:
+            os.close(dfd)
+
+
+class SyncFolder:
+    """relay's sync layout and rules on top of a storage backend
+    (:class:`LocalStorage`, or ``sync_http.HttpStorage`` for a mailbox)."""
+
+    def __init__(self, root: "Path | str | Any", manifest: Manifest | None = None):
+        self.storage = root if hasattr(root, "names") else LocalStorage(root)
+        self.root = getattr(self.storage, "root", None)
+        self.manifest: Manifest = manifest if manifest is not None else MemoryManifest()
+
+    # -- storage wrappers -------------------------------------------------
+
+    def _names(self) -> list[str]:
+        return self.storage.names()
+
+    def _read_bytes(self, name: str) -> bytes | None:
+        return self.storage.read(name)
+
+    def _read_json(self, name: str) -> Any:
+        raw = self._read_bytes(name)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+
+    def _create(self, name: str, data: dict) -> str:
+        """Create a new file; never overwrites anything. Returns its name."""
+        if "/" in name or name.startswith("."):
+            raise FolderError(f"bad file name {name!r}")
+        body = (json.dumps(data, indent=1) + "\n").encode()
+        self.storage.create(name, body)
         self.manifest.record(name, hashlib.sha256(body).hexdigest())
         return name
 
@@ -215,13 +254,7 @@ class SyncFolder:
             if raw is None:
                 self.manifest.forget(name)  # already gone (or replaced by a non-file)
             return False
-        dfd = self._open_root()
-        try:
-            os.unlink(name, dir_fd=dfd)  # removes the name itself; never follows a link
-        except FileNotFoundError:
-            pass
-        finally:
-            os.close(dfd)
+        self.storage.delete(name)
         self.manifest.forget(name)
         return True
 
@@ -231,17 +264,17 @@ class SyncFolder:
         return self._read_bytes(MARKER) is not None
 
     def check(self) -> None:
-        os.close(self._open_root())
+        self.storage.check()
         if self.is_initialized():
             marker = self._read_json(MARKER)
             if not isinstance(marker, dict) or marker.get("format") != FORMAT:
                 raise FolderError(
-                    f"{self.root / MARKER} is from a different relay version (format "
+                    f"{MARKER} in {self.storage.describe()} is from a different relay version (format "
                     f"{marker.get('format') if isinstance(marker, dict) else '?'}); use a new, empty folder"
                 )
 
-    def initialize(self) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
+    def initialize(self, host_id: str = "") -> None:
+        self.storage.prepare(host_id)
         if not self.is_initialized():
             self._create(MARKER, {"format": FORMAT, "app": "relay"})
 

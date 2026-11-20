@@ -126,7 +126,7 @@ Absent means sync is off and relay is local-only. Written by `/relay:sync setup`
 ```
 
 - **enabled** — `true`/`false`. `/relay:sync disable` sets `false` and keeps the rest; `disable --forget` removes the block.
-- **backend** — `folder` (a shared or synced directory; uses `folder`) or `http` (self-hosted mailbox; uses `url`, https only except localhost — not available yet).
+- **backend** — `folder` (a shared or synced directory; uses `folder`) or `http` (a [relay mailbox](../mailbox/README.md); uses `url`, https only except localhost). With `http`, the machine's token comes from `token_command` (if set; run on each sync) or `~/.config/relay/sync.token` (0600). The mailbox stores the same flat file set as a folder and enforces that each token, bound to one host ID, only creates or deletes files named `<that host>.…`.
 - **scope** — `state` (workstreams, state files, ideas, hints, tags, git snapshots) or `state+messages` (also conversation messages, for cross-machine search).
 - Hooks check `.sync.enabled == true` with `jq` and only then run `uv run --no-dev --extra sync … python -m relay_server.sync pull|push` (pull in the foreground at session start, capped by `RELAY_SYNC_PULL_TIMEOUT`, default 5 s; pushes in the background). Output goes to `sync.log`.
 

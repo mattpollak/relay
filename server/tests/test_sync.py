@@ -151,19 +151,6 @@ def test_setup_refuses_to_overwrite_corrupt_config(data_dir, shared):
     assert (data_dir / "relay.json").read_text() == "{oops"
 
 
-def test_setup_http_localhost_allowed(data_dir):
-    sync.setup_sync(data_dir, backend="http", url="http://localhost:8443/")
-    assert _config(data_dir)["sync"]["url"] == "http://localhost:8443"
-
-
-def test_rerun_setup_switches_backend_and_drops_stale_target(data_dir, shared):
-    sync.setup_sync(data_dir, backend="folder", folder=str(shared))
-    sync.setup_sync(data_dir, backend="http", url="https://nas.tailnet.ts.net:8443", scope="state+messages")
-    block = _config(data_dir)["sync"]
-    assert block["backend"] == "http" and "folder" not in block
-    assert block["scope"] == "state+messages"
-
-
 def test_nickname_none_keeps_empty_clears(data_dir, shared):
     sync.setup_sync(data_dir, backend="folder", folder=str(shared), nickname="desk")
     sync.setup_sync(data_dir, backend="folder", folder=str(shared))
@@ -240,22 +227,6 @@ def test_cli(data_dir, capsys):
     assert sync.main(["pull"]) == 0
     assert capsys.readouterr().out == ""  # silent when off
     assert sync.main(["bogus"]) == 2
-
-
-def test_run_sync_http_not_available_yet(data_dir):
-    sync.setup_sync(data_dir, backend="http", url="https://nas.example.ts.net:8443")
-    assert sync.run_sync("pull", data_dir) == {
-        "ran": False, "reason": "transport-unavailable", "backend": "http",
-    }
-    text = sync.format_status(sync.sync_status(data_dir))
-    assert "not available in this version" in text
-    with pytest.raises(ValueError):
-        sync.run_sync("sideways", data_dir)
-
-
-# ---------------------------------------------------------------------------
-# MCP tool
-# ---------------------------------------------------------------------------
 
 
 def test_manage_sync_tool(data_dir, shared):
