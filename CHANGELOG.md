@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.16.0] - 2026-11-20
+
+### Added
+- **Local event log** — Every change to authored data (workstream registry entries, `state.md`, `plan.md`/`architecture.md`, ideas, session hints, manual tags) is now recorded as an immutable event in `~/.config/relay/events.db`. Event IDs are hybrid-logical-clock values (`<unix-ms>-<counter>-<host-id>`): time-sortable, monotonic per machine, and unique across machines. Groundwork for optional multi-machine sync; nothing leaves the machine and no new dependencies are needed.
+- **Edits outside relay are captured** — The log is kept in step by comparing files on disk against it after every relay tool call and at server startup, so edits made in an editor or by a script are recorded too.
+- **Stable idea IDs** — Ideas in `ideas.json` get a `uid` field (random, globally unique) next to their numeric `id`. The numeric id is still what you see and use; the uid is how the event log identifies an idea, so ideas from different machines can't collide later. Existing ideas get a uid automatically.
+- **Host identity** — A stable random `host_id` is added to `relay.json` on first run (with the hostname it was created on). An optional `nickname` key sets the display name; otherwise the hostname is used.
+- **Inspect the log** — `uv run --directory <plugin>/server python -m relay_server.events verify` prints event counts and checks the log against the files on disk.
+
+### Fixed
+- **`reindex` lost session hints and manual message tags** — Hints written by MCP tools existed only in the search index, which `reindex` wipes. They are now restored from the event log after a reindex.
+
+### Notes
+- **Automatic migration** — On first start, relay copies the data dir to `~/.config/relay/backups/pre-event-log-<timestamp>/` (plus the hints and manual tags from the search index) and imports everything as events. Existing files are not modified, apart from `host_id` being added to `relay.json` and `uid` to each idea in `ideas.json`.
+- If the event log ever fails, relay tools keep working exactly as before; the error is logged.
+
 ## [0.15.3] - 2026-11-19
 
 ### Changed

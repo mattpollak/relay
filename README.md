@@ -247,7 +247,9 @@ Configuration lives at `${XDG_CONFIG_HOME:-$HOME/.config}/relay/`:
 
 ```
 ~/.config/relay/
-├── relay.json                    # Server-level config (optional — see below)
+├── relay.json                    # Server-level config + this machine's host_id (see below)
+├── events.db                     # Event log of every change to authored data (SQLite)
+├── backups/                      # One-time backup taken before the event log was first created
 ├── workstreams.json              # Central registry
 ├── ideas.json                    # Pre-workstream ideas (shown in /relay:list)
 ├── session-markers/              # Links session IDs to workstreams (written by session-start hook and MCP tools)
@@ -263,7 +265,11 @@ Configuration lives at `${XDG_CONFIG_HOME:-$HOME/.config}/relay/`:
     └── ...
 ```
 
-The conversation search index lives at `~/.local/share/relay/index.db` (SQLite, WAL mode).
+The conversation search index lives at `~/.local/share/relay/index.db` (SQLite, WAL mode). It is derived from Claude Code's transcripts and can be rebuilt with `reindex`; hints and manual tags are restored from `events.db` afterwards.
+
+### Event log
+
+Every change to authored data (registry entries, `state.md`, `plan.md`, `architecture.md`, ideas, session hints, manual tags) is appended to `events.db` as an immutable event with a time-sortable ID (`<unix-ms>-<counter>-<host-id>`). Relay records changes after each of its tools runs and at startup, by comparing the files on disk with the log, so edits made outside relay are captured too. The files stay the source that hooks and tools read. The log is groundwork for optional multi-machine sync and never leaves the machine on its own. See [references/formats.md](references/formats.md#eventsdb).
 
 Activity summaries are written to `~/.local/share/relay/summaries/` by default (configurable — see below).
 
@@ -280,6 +286,8 @@ Optional server-level settings in `~/.config/relay/relay.json`:
 | Key | What it does | Default |
 |---|---|---|
 | `summary_dir` | Directory for `/relay:summarize` output files | `~/.local/share/relay/summaries` |
+| `nickname` | Display name for this machine (used by future multi-machine features) | the machine's hostname |
+| `host_id` | Stable random ID for this machine, written automatically on first run. Don't edit or copy it to another machine. | generated |
 
 The file is optional — relay works fine without it. Missing or malformed files are silently ignored. The `output_dir` parameter on `summarize_activity` overrides the config value.
 

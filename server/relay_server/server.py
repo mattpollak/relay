@@ -60,6 +60,14 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
         f"{stats['messages']} new messages, "
         f"{stats['skipped']} unchanged ({stats['duration_seconds']}s)"
     )
+    try:
+        from .events import ensure_event_log
+        from .workstreams import get_data_dir
+
+        result = ensure_event_log(get_data_dir(), db_path)
+        logger.info(f"Event log: {result['status']}, {result['new_events']} new events")
+    except Exception:
+        logger.exception("relay event log: startup failed (relay keeps working without it)")
     yield AppContext(db_path=db_path)
 
 
@@ -77,6 +85,20 @@ MAX_TAG_LENGTH = 200
 
 def _get_db_path(ctx: Context[ServerSession, AppContext]) -> Path:
     return ctx.request_context.lifespan_context.db_path
+
+
+def _record_events(source: str, db_path: Path | None = None) -> None:
+    """Record any changes to authored data in the event log.
+
+    Never raises: the event log must not break the tool that triggered it.
+    """
+    try:
+        from .events import record_changes
+        from .workstreams import get_data_dir
+
+        record_changes(get_data_dir(), db_path=db_path, source=source)
+    except Exception:
+        logger.exception(f"relay event log: failed to record changes after {source}")
 
 
 def _clamp_limit(limit: int, default: int = 10) -> int:
@@ -465,6 +487,7 @@ def tag_message(
             [(message_id, tag, "manual") for tag in tags],
         )
         conn.commit()
+        _record_events("tag_message", db_path)
 
         # Return updated tag list
         tag_rows = conn.execute(
@@ -513,6 +536,7 @@ def tag_session(
             [(session_id, tag, "manual") for tag in tags],
         )
         conn.commit()
+        _record_events("tag_session", db_path)
 
         tag_rows = conn.execute(
             "SELECT tag, source FROM session_tags WHERE session_id = ?",
@@ -1166,7 +1190,7 @@ def save_workstream(
     db_path = _get_db_path(ctx)
     conn = get_connection(db_path)
     try:
-        return _save(
+        result = _save(
             data_dir=get_data_dir(),
             conn=conn,
             name=name,
@@ -1179,6 +1203,8 @@ def save_workstream(
         )
     finally:
         conn.close()
+    _record_events("save_workstream", db_path)
+    return result
 
 
 @mcp.tool(annotations=_WRITE)
@@ -1229,11 +1255,13 @@ async def create_workstream(
             if git_strategy is None and create_result.git_strategy and create_result.git_strategy != "none":
                 git_strategy = create_result.git_strategy
 
-    return _create(
+    result = _create(
         data_dir=get_data_dir(), name=name, description=description,
         project_dir=project_dir, color=color,
         git_strategy=git_strategy, git_branch=git_branch, worktree_path=worktree_path,
     )
+    _record_events("create_workstream")
+    return result
 
 
 @mcp.tool(annotations=_WRITE_IDEMPOTENT)
@@ -1262,11 +1290,13 @@ def update_workstream(
     """
     from .workstreams import get_data_dir
     from .workstreams import update_workstream as _update
-    return _update(
+    result = _update(
         data_dir=get_data_dir(), name=name, description=description,
         project_dir=project_dir, color=color,
         git_strategy=git_strategy, git_branch=git_branch, worktree_path=worktree_path,
     )
+    _record_events("update_workstream")
+    return result
 
 
 @mcp.tool(annotations=_WRITE)
@@ -1299,13 +1329,15 @@ def park_workstream(
     db_path = _get_db_path(ctx)
     conn = get_connection(db_path)
     try:
-        return _park(
+        result = _park(
             data_dir=get_data_dir(), conn=conn, name=name, state_content=state_content,
             session_id=session_id, hint_summary=hint_summary, hint_decisions=hint_decisions,
             stash_ref=stash_ref, clear_stash=clear_stash, remove_worktree=remove_worktree,
         )
     finally:
         conn.close()
+    _record_events("park_workstream", db_path)
+    return result
 
 
 @mcp.tool(annotations=_WRITE)
@@ -1396,7 +1428,7 @@ async def switch_workstream(
     db_path = _get_db_path(ctx)
     conn = get_connection(db_path)
     try:
-        return _switch(
+        result = _switch(
             data_dir=data_dir, conn=conn, to_name=to_name, from_name=from_name,
             state_content=state_content, session_id=session_id,
             hint_summary=hint_summary, hint_decisions=hint_decisions,
@@ -1404,6 +1436,8 @@ async def switch_workstream(
         )
     finally:
         conn.close()
+    _record_events("switch_workstream", db_path)
+    return result
 
 
 @mcp.tool(annotations=_READ_ONLY)
@@ -1503,7 +1537,10 @@ def manage_idea(
     """
     from .workstreams import get_data_dir
     from .workstreams import manage_idea as _manage
-    return _manage(data_dir=get_data_dir(), action=action, text=text, idea_id=idea_id)
+    result = _manage(data_dir=get_data_dir(), action=action, text=text, idea_id=idea_id)
+    if action != "list":
+        _record_events("manage_idea")
+    return result
 
 
 @mcp.tool(annotations=_WRITE)
@@ -1522,7 +1559,10 @@ def manage_worktree(
     """
     from .workstreams import get_data_dir
     from .workstreams import manage_worktree as _manage
-    return _manage(data_dir=get_data_dir(), action=action, name=name, path=path)
+    result = _manage(data_dir=get_data_dir(), action=action, name=name, path=path)
+    if action != "list":
+        _record_events("manage_worktree")
+    return result
 
 
 @mcp.tool(annotations=_WRITE_IDEMPOTENT)
@@ -1533,14 +1573,28 @@ def reindex(ctx: Context[ServerSession, AppContext]) -> dict:
     the index seems corrupted or out of sync.
     """
     db_path = _get_db_path(ctx)
+    # Record authored rows first so the log has everything reindex will wipe.
+    _record_events("reindex", db_path)
     stats = do_reindex(db_path)
-    return {
+    result = {
         "status": "complete",
         "files_indexed": stats["files"],
         "messages_indexed": stats["messages"],
         "sessions_found": stats["sessions"],
         "duration_seconds": stats["duration_seconds"],
     }
+    try:
+        from .events import restore_authored_rows
+        from .workstreams import get_data_dir
+
+        conn = get_connection(db_path)
+        try:
+            result["restored"] = restore_authored_rows(get_data_dir(), conn)
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("relay event log: failed to restore hints/tags after reindex")
+    return result
 
 
 @mcp.tool(annotations=_WRITE_IDEMPOTENT)
@@ -1555,9 +1609,11 @@ def fix_other_hints(ctx: Context[ServerSession, AppContext]) -> dict:
     db_path = _get_db_path(ctx)
     conn = get_connection(db_path)
     try:
-        return _fix_other_hints_impl(conn)
+        result = _fix_other_hints_impl(conn)
     finally:
         conn.close()
+    _record_events("fix_other_hints", db_path)
+    return result
 
 
 @mcp.tool(annotations=_WRITE_IDEMPOTENT)
@@ -1583,6 +1639,8 @@ def write_session_hint(
     db_path = _get_db_path(ctx)
     conn = get_connection(db_path)
     try:
-        return _write(conn=conn, session_id=session_id, workstream=workstream, summary=summary, decisions=decisions)
+        result = _write(conn=conn, session_id=session_id, workstream=workstream, summary=summary, decisions=decisions)
     finally:
         conn.close()
+    _record_events("write_session_hint", db_path)
+    return result

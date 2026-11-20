@@ -7,6 +7,7 @@ with jq. This module is the primary writer.
 
 import json
 import os
+import secrets
 import sqlite3
 import tempfile
 from datetime import datetime, timezone
@@ -72,6 +73,11 @@ def atomic_write(path: Path, content: str) -> None:
         except OSError:
             pass
         raise
+
+
+def new_idea_uid() -> str:
+    """Stable, globally unique idea identifier (the numeric id is per-machine)."""
+    return secrets.token_hex(8)
 
 
 def today() -> str:
@@ -602,7 +608,7 @@ def manage_idea(
         if not text:
             return {"status": "error", "message": "Text is required"}
         new_id = max((i.get("id", 0) for i in ideas), default=0) + 1
-        ideas.append({"id": new_id, "text": text, "added": today()})
+        ideas.append({"id": new_id, "uid": new_idea_uid(), "text": text, "added": today()})
         atomic_write(ideas_path, json.dumps(ideas, indent=2) + "\n")
         return {"status": "added", "id": new_id, "text": text}
 

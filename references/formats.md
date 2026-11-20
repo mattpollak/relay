@@ -74,3 +74,39 @@ Cross-project ideas and future work. Simple bullet list.
 
 - **plan.md** — Implementation plan. Not auto-loaded; read on explicit `/relay:switch`.
 - **architecture.md** — Architecture notes. Not auto-loaded; read on explicit `/relay:switch`.
+
+## events.db
+
+SQLite event log of authored data (`~/.config/relay/events.db`). Written by the MCP server only.
+
+### Tables
+- **events** — `id` (HLC: `<unix-ms 13 digits>-<counter 4 digits>-<host_id>`), `host_id`, `type`, `schema` (event format version, currently 1), `key`, `parent` (previous event ID for the same key), `wall_ts`, `source` (tool name, `external`, or `import`), `payload` (JSON)
+- **heads** — current value per key, folded from events (`value` NULL = deleted)
+- **meta** — `hlc` clock state, `migrated_at`, `migration_backup`
+
+### Keys and event types
+
+| Key | Created / changed | Deleted | Payload |
+|---|---|---|---|
+| `ws/<name>` | `ws.create`, `ws.update` | `ws.delete` | `{"value": entry}` or `{"set": {...}, "unset": [...]}` |
+| `state/<name>` | `state.save` | `state.delete` | `{"value": "<markdown>"}` |
+| `file/<name>/<plan.md\|architecture.md>` | `ws.file` | `ws.file.delete` | `{"value": "<markdown>"}` |
+| `idea/<uid>` | `idea.add`, `idea.update` | `idea.delete` | idea object or field patch |
+| `hint/<source_file>` | `hint.write` | — | session_id, workstream, timestamp, summary, decisions |
+| `stag/<session_id>/<tag>` | `tag.session` | — | manual session tag |
+| `mtag/<message_key>/<tag>` | `tag.message` | — | manual message tag; `message_key` is a hash of session, timestamp, role, content (local message IDs differ per machine) |
+| `host/<host_id>` | `host.info` | — | hostname, nickname, platform, relay version |
+
+Hints and tags are never deleted by reconciling, because `reindex` empties them from the search index.
+
+## ideas.json
+
+List of ideas: `{"id": 1, "uid": "3f9c0a7d12be4e05", "text": "...", "added": "YYYY-MM-DD"}`.
+- **id** — small number shown to users (`/relay:idea promote <id>`), assigned per machine.
+- **uid** — stable random identifier used by the event log. Added automatically to ideas that don't have one.
+
+## relay.json host identity
+
+- **host_id** — 6 random base32 characters, created on first run, never changes. Part of every event ID.
+- **host_id_hostname** — hostname when the ID was created.
+- **nickname** — optional display name; defaults to the hostname.
