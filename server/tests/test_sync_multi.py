@@ -665,7 +665,8 @@ def test_deleting_revoke_record_does_not_restore_access(pair, folder):
     a.push()
     status = sync.sync_status(a.data_dir)["details"]
     assert b.host_id not in {m["host_id"] for m in status["members"]}
-    assert "missing from the shared folder" in status["error"]
+    # laptop's push re-uploaded the revoke record it signed (self-repair)
+    assert list(folder.glob(f"*.member.*-revoke-{b.host_id}.json"))
     newest = max(folder.glob(f"{a.host_id}.batch.*.json"), key=lambda p: p.name)
     assert b.host_id not in json.loads(newest.read_text())["wraps"]
 
@@ -829,3 +830,121 @@ def test_reads_only_regular_files(folder, tmp_path):
     assert f._read_bytes("link.json") is None
     assert f._read_bytes("pipe.json") is None
     assert f._read_bytes("real.json") == b"{}"
+
+
+def test_setup_reports_its_own_first_push(a, folder, monkeypatch):
+    """Regression: a background push used to race setup's own sync ("Pushed 0")."""
+    from relay_server import server
+
+    started = []
+    monkeypatch.setattr(server, "_push_in_background", lambda: started.append(1))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(a.data_dir.parent))
+    create_workstream(data_dir=a.data_dir, name="proj", description="p")
+    out = server.manage_sync(action="setup", ctx=None, backend="folder", folder=str(folder), nickname="laptop")
+    assert started == []
+    import re
+
+    pushed = re.search(r"Pushed (\d+) events", out)
+    assert pushed and int(pushed.group(1)) > 0, out
+
+
+# ---------------------------------------------------------------------------
+# Compaction and self-repair
+# ---------------------------------------------------------------------------
+
+
+def test_compaction_keeps_file_count_bounded(pair, folder, monkeypatch):
+    a, b = pair
+    monkeypatch.setattr(sync_engine, "COMPACT_AFTER", 3)
+    for i in range(8):  # desk is offline the whole time
+        a.write_state("proj", f"# proj\n\nedit {i}\n")
+        a.push()
+    assert len(list(folder.glob(f"{a.host_id}.batch.*.json"))) <= 3
+    b.pull()  # catches up from the snapshot even though older files are gone
+    assert b.state("proj") == "# proj\n\nedit 7\n"
+    assert _shared_keys(a.heads()) == _shared_keys(b.heads())
+
+
+def test_wiped_folder_is_rebuilt(pair, folder):
+    a, b = pair
+    for p in folder.iterdir():
+        p.unlink()
+    a.write_state("proj", "# proj\n\nafter the wipe\n")
+    res = a.push()
+    assert res["snapshot"] == "repair" and res["repaired"]["marker"] and res["repaired"]["records"] >= 2
+    b.push()  # desk restores its own files too
+    assert b.pull()["ok"] and b.state("proj") == "# proj\n\nafter the wipe\n"
+    b.write_state("proj", "# proj\n\nfrom desk after the wipe\n")
+    b.push()
+    a.pull()
+    assert a.state("proj") == "# proj\n\nfrom desk after the wipe\n"
+    members = {m["host_id"] for m in sync.sync_status(b.data_dir)["details"]["members"]}
+    assert members == {a.host_id, b.host_id}
+
+
+def test_new_member_gets_full_history_even_after_a_snapshot(pair, folder, tmp_path):
+    a, b = pair
+    b.write_state("proj", "# proj\n\nwritten on desk\n")
+    b.push()
+    a.pull()
+    c = Host(tmp_path, "third")
+    c.setup(folder, trust=a)
+    sync_engine.approve(a.data_dir, a.db_path, "third")
+    sync_engine.reseal_own_batches(a.data_dir, a.db_path)  # laptop snapshots again before third pulls
+    c.pull()
+    assert c.state("proj") == "# proj\n\nwritten on desk\n"
+
+
+# ---------------------------------------------------------------------------
+# Review round 5 fixes
+# ---------------------------------------------------------------------------
+
+
+def test_remote_git_snapshot_is_sanitized():
+    from relay_server.git_snapshot import notices_for, sanitize_snapshot
+
+    hostile = {
+        "branch": "main\x1b[31m", "modified": 2, "staged": "3\x1b", "untracked": 1,
+        "branches": [
+            {"name": "feat\x1b]0;pwned\x07", "head": "a" * 40, "unpushed": 1},
+            {"name": "evil", "head": "--output=/tmp/x", "unpushed": 1},   # would be passed to git
+            {"name": "x", "head": "-" * 40, "unpushed": 1},
+        ],
+        "taken_at": "2026-11-20T00:00:00Z",
+    }
+    clean = sanitize_snapshot(hostile)
+    assert [b["name"] for b in clean["branches"]] == ["feat]0;pwned"]
+    assert clean["branch"] == "main[31m" and clean["staged"] == 0
+    lines, _ = notices_for(hostile, "desktop", None)
+    assert lines and not any(ch in "".join(lines) for ch in "\x1b\x07")
+
+
+def test_replaced_join_request_is_reported(a, b, folder, tmp_path):
+    from relay_server import sync_crypto as sc
+
+    a.setup(folder)
+    b.setup(folder, trust=a)
+    req = folder / f"{b.host_id}.request.json"
+    attacker = sc.ensure_host_key(tmp_path / "attacker")
+    req.unlink()
+    req.write_text(json.dumps(sc.sign_record(attacker, {
+        "host_id": b.host_id, "key": attacker.public_b64, "name": "desk", "hostname": "x", "at_ms": 1,
+    })))
+    res = b.pull()
+    assert res["ok"] is False and "replaced" in res["error"]
+    assert "replaced by someone else" in sync.sync_status(b.data_dir)["details"]["error"]
+    with pytest.raises(sync.SyncConfigError, match="replaced by someone else"):
+        b.setup(folder, trust=a)
+
+
+def test_snapshot_waits_until_other_members_are_pulled(pair, folder, monkeypatch):
+    a, b = pair
+    monkeypatch.setattr(sync_engine, "COMPACT_AFTER", 1)  # laptop has 1 own file after the fixture
+    b.write_state("proj", "# proj\n\ndesk edit laptop hasn't pulled\n")
+    b.push()
+    a.write_state("proj", "# proj\n\nlaptop edit\n")
+    res = a.push()  # laptop has unread batches from desk: no snapshot yet
+    assert res["snapshot"] is None and res["snapshot_deferred"] == "compact" and res["events"] >= 1
+    a.pull()
+    res = a.push()
+    assert res["snapshot"] == "compact" and res["snapshot_deferred"] is None

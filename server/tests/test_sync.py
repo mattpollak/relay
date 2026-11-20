@@ -5,7 +5,9 @@ launches nothing extra from hooks, and has no new dependencies.
 """
 
 import json
+import re
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -379,3 +381,63 @@ def test_plugin_runs_without_dev_dependencies():
     assert "--no-dev" in mcp["mcpServers"]["relay-search"]["args"]
     common = (SCRIPTS / "common.sh").read_text()
     assert common.count("uv run --quiet --no-dev --extra sync") == 2
+
+
+# ---------------------------------------------------------------------------
+# Statusline sync segment + sync-status.json
+# ---------------------------------------------------------------------------
+
+
+def _statusline(data_dir: Path) -> str:
+    out = subprocess.run(
+        ["bash", str(SCRIPTS / "statusline.sh")],
+        input=json.dumps({"workspace": {"current_dir": "/tmp"}, "session_id": "x"}),
+        capture_output=True, text=True, timeout=10,
+        env={**os.environ, "XDG_CONFIG_HOME": str(data_dir.parent)},
+    )
+    return out.stdout.strip()
+
+
+def test_statusline_unchanged_when_sync_off(data_dir):
+    (data_dir / "workstreams.json").write_text(json.dumps({"version": 1, "workstreams": {"proj": {"status": "active"}}}))
+    assert _statusline(data_dir) == "/tmp │ proj"
+    (data_dir / "relay.json").write_text(json.dumps({"sync": {"enabled": False, "backend": "folder", "folder": "/x"}}))
+    (data_dir / "sync-status.json").write_text(json.dumps({"ok": True, "last_ok_at": "2026-01-01T00:00:00Z"}))
+    assert _statusline(data_dir) == "/tmp │ proj"
+
+
+def test_statusline_sync_states(data_dir):
+    (data_dir / "workstreams.json").write_text(json.dumps({"version": 1, "workstreams": {"proj": {"status": "active"}}}))
+    (data_dir / "relay.json").write_text(json.dumps({"sync": {"enabled": True, "backend": "http", "url": "https://x"}}))
+    assert _statusline(data_dir).endswith("│ ⇅ not synced yet")
+    status = data_dir / "sync-status.json"
+    status.write_text(json.dumps({"ok": True, "role": "member", "last_ok_at": "2000-01-01T00:00:00Z"}))
+    assert re.search(r"│ ⇅ \d+d$", _statusline(data_dir))
+    status.write_text(json.dumps({"ok": False, "error": "can't reach the sync mailbox", "role": "member",
+                                  "last_ok_at": "2000-01-01T00:00:00Z"}))
+    assert "⇅ offline (" in _statusline(data_dir)
+    status.write_text(json.dumps({"ok": False, "error": "mailbox error 500", "role": "member"}))
+    assert _statusline(data_dir).endswith("⇅ ⚠ sync error")
+    status.write_text(json.dumps({"ok": True, "role": "pending", "last_ok_at": None}))
+    assert _statusline(data_dir).endswith("⇅ awaiting approval")
+    status.write_text(json.dumps({"ok": True, "role": "member", "last_ok_at": sync._utc_now()}))
+    (data_dir / "sync-notices.json").write_text(json.dumps({
+        "requests": ["relay: new machine 'x' wants to join"],
+        "workstreams": {"proj": ["relay: work on desktop not visible here (snapshot 1h ago):", "  uncommitted"]},
+    }))
+    (data_dir / "workstreams" / "proj").mkdir(parents=True)
+    (data_dir / "workstreams" / "proj" / "state.conflict-desktop-20261120T000000Z.md").write_text("x")
+    assert _statusline(data_dir).endswith("⇅ now +1 join ⚑ desktop ⚠ conflict")
+
+
+def test_run_status_file(data_dir, shared):
+    sync.setup_sync(data_dir, backend="folder", folder=str(shared))
+    sync.run_sync("push", data_dir, data_dir / "none.db")
+    first = json.loads((data_dir / "sync-status.json").read_text())
+    assert first["ok"] is True and first["role"] == "member" and first["last_ok_at"]
+    shutil.rmtree(shared)  # the folder disappears (unmounted / not synced)
+    res = sync.run_sync("pull", data_dir, data_dir / "none.db")
+    assert res["ran"] is False
+    second = json.loads((data_dir / "sync-status.json").read_text())
+    assert second["ok"] is False and "available" in second["error"]
+    assert second["last_ok_at"] == first["last_ok_at"]  # last success kept

@@ -7,6 +7,8 @@
 # Respects config in ~/.config/relay/relay.json:
 #   "terminal_color": true/false  (default: true)
 #   "terminal_title": true/false  (default: true)
+# With multi-machine sync on ("sync": {"enabled": true}), appends a sync segment
+# read from sync-status.json / sync-notices.json (jq only; nothing when sync is off).
 
 input=$(cat)
 
@@ -18,10 +20,12 @@ branch=$(GIT_OPTIONAL_LOCKS=0 git -C "$cwd" symbolic-ref --short HEAD 2>/dev/nul
 RELAY_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/relay/relay.json"
 enable_color=true
 enable_title=true
+sync_on=false
 if [ -f "$RELAY_CONFIG" ] && command -v jq &>/dev/null; then
-  read -r cfg_color cfg_title <<< "$(jq -r '[.terminal_color // true, .terminal_title // true] | @tsv' "$RELAY_CONFIG" 2>/dev/null)"
+  read -r cfg_color cfg_title cfg_sync <<< "$(jq -r '[.terminal_color // true, .terminal_title // true, ((.sync | type) == "object" and .sync.enabled == true)] | @tsv' "$RELAY_CONFIG" 2>/dev/null)"
   [ "$cfg_color" = "false" ] && enable_color=false
   [ "$cfg_title" = "false" ] && enable_title=false
+  [ "$cfg_sync" = "true" ] && sync_on=true
 fi
 
 # Determine active workstream for this session
@@ -100,6 +104,38 @@ fi
 statusline="${display_cwd}"
 [ -n "$branch_display" ] && statusline="${statusline} (${branch_display})"
 [ -n "$workstream" ] && statusline="${statusline} │ ${workstream}"
+
+# Sync segment (only with multi-machine sync on): last sync age or problem,
+# machines waiting to join, conflicts / work on other machines for this workstream.
+if [ "$sync_on" = "true" ]; then
+  SYNC_STATUS="$RELAY_DATA/sync-status.json"
+  SYNC_NOTICES="$RELAY_DATA/sync-notices.json"
+  sync_display="⇅ not synced yet"
+  if [ -f "$SYNC_STATUS" ]; then
+    sync_display=$(jq -r '
+      def age: if . == null then "never" else
+        ((now - (sub("\\.[0-9]+"; "") | fromdateiso8601)) | floor) as $s
+        | if $s < 60 then "now" elif $s < 3600 then "\($s / 60 | floor)m"
+          elif $s < 172800 then "\($s / 3600 | floor)h" else "\($s / 86400 | floor)d" end end;
+      if .role == "pending" then "⇅ awaiting approval"
+      elif (.role == "revoked" or .role == "key-mismatch") then "⇅ ⚠ revoked"
+      elif .ok then "⇅ \(.last_ok_at | age)"
+      elif ((.error // "") | test("reach|available|timed out"; "i")) then "⇅ offline (\(.last_ok_at | age))"
+      else "⇅ ⚠ sync error" end' "$SYNC_STATUS" 2>/dev/null || echo "⇅ ?")
+  fi
+  if [ -f "$SYNC_NOTICES" ]; then
+    sync_extra=$(jq -r --arg ws "$workstream" '
+      [ ((.requests // []) | length | select(. > 0) | "+\(.) join"),
+        ((.workstreams[$ws] // []) | map(capture("^relay: work on (?<h>[^[:cntrl:]]{1,32}) not visible here").h // empty) | unique
+          | select(length > 0) | "⚑ " + join(","))
+      ] | join(" ")' "$SYNC_NOTICES" 2>/dev/null || true)
+    [ -n "$sync_extra" ] && sync_display="${sync_display} ${sync_extra}"
+  fi
+  if [ -n "$workstream" ] && compgen -G "$RELAY_DATA/workstreams/$workstream/*.conflict-*.md" >/dev/null 2>&1; then
+    sync_display="${sync_display} ⚠ conflict"
+  fi
+  statusline="${statusline} │ ${sync_display}"
+fi
 
 # Set terminal title: dirname (branch) │ workstream
 if [ "$enable_title" = "true" ]; then

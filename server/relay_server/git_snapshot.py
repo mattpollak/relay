@@ -152,9 +152,50 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
+_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_MAX_REF = 80
+
+
+def _clean_text(value: object, limit: int = _MAX_REF) -> str | None:
+    """Printable, single-line, bounded text — snapshots come from other machines."""
+    if not isinstance(value, str):
+        return None
+    text = "".join(ch for ch in value if ch.isprintable()).strip()
+    return text[:limit] or None
+
+
+def _count(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def sanitize_snapshot(snap: dict) -> dict:
+    """A snapshot from another machine, reduced to safe values: printable branch
+    names, hex commit IDs only (they're passed to local git commands, so
+    nothing that could look like an option), integer counts."""
+    branches = []
+    for b in snap.get("branches") or []:
+        if not isinstance(b, dict):
+            continue
+        name, head = _clean_text(b.get("name")), b.get("head")
+        if not name or not (isinstance(head, str) and _SHA_RE.match(head)):
+            continue
+        branches.append({"name": name, "head": head, "unpushed": _count(b.get("unpushed"))})
+    return {
+        "repo": _clean_text(snap.get("repo"), 200),
+        "branch": _clean_text(snap.get("branch")),
+        "modified": _count(snap.get("modified")),
+        "staged": _count(snap.get("staged")),
+        "untracked": _count(snap.get("untracked")),
+        "stash": _count(snap.get("stash")),
+        "branches": branches[:50],
+        "taken_at": snap.get("taken_at") if isinstance(snap.get("taken_at"), str) else "",
+    }
+
+
 def notices_for(snap: dict, host_name: str, local_repo: Path | None, now: datetime | None = None) -> tuple[list[str], bool]:
     """Lines describing another machine's snapshot, checked against the local
     repo. Returns (lines, fetch_needed). Empty lines = nothing to report."""
+    snap = sanitize_snapshot(snap if isinstance(snap, dict) else {})
     if local_repo is not None:
         local_identity = repo_identity(local_repo)
         if snap.get("repo") and local_identity and snap["repo"] != local_identity:

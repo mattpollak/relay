@@ -133,6 +133,7 @@ Absent means sync is off and relay is local-only. Written by `/relay:sync setup`
 ## Sync keys and files
 
 - **`sync.key`** — this machine's Ed25519 private key (hex seed, mode 0600). Signs everything the machine writes; its X25519 form receives batches. Never leaves the machine.
+- **`sync-status.json`** — written after every sync run, for the statusline: `{"at", "direction", "ok", "error", "role", "last_ok_at"}`.
 - **`sync-notices.json`** — written after each pull for the SessionStart hook: `{"workstreams": {name: [lines]}, "requests": [lines], "role", "error"}`.
 - `msgb/<host_id>/<session_id>/<first-message-key>` (`msg.batch`, scope `state+messages`): `{"session": {session_id, project_dir, slug, git_branch, cwd}, "messages": [{key, role, content, timestamp, model}]}`, at most 400 messages / 512 KB each. Receivers insert them into `index.db` as sessions with `sessions.origin_host` = the sender (NULL = this machine); `reindex` restores them. `events.db` table `sync_msg_sent` lists message keys already shared; `meta.sync_msg_cursor` is the last `messages.id` packed.
 - `redact/<id>` (`msg.redact`): `{"events": {event_id: scrubbed payload}, "messages": [{session_id, role, timestamp, old_key, content}]}`. Also `"fingerprints": [{"salt", "len", "h"}]` — a keyed BLAKE2b hash of the redacted text (never the text). Every machine stores fingerprints in `events.db` `meta.redaction_fingerprints` and scrubs messages indexed after `meta.redact_scan_id` (at startup, after `reindex`, before packing messages, after receiving a redaction). Receivers apply a scrubbed payload only if it equals the old one with parts replaced by `[redacted]`, then rewrite their own batch files (`-r<time>-<n>` suffix) and `.bak`/conflict copies. Re-applied to local messages after `reindex`.
@@ -150,7 +151,7 @@ relay-sync.json                                              {"format": 2, "app"
 <host>.batch.<last-event-id>[-h<id>|-r<time>][-<n>].json     encrypted batches (-h: history for a new member; -r: rewritten after a redaction; -<n>: continuation, max 1000 events / ~4 MB per file)
 ```
 
-Every name starts with the machine that writes it, so file-syncing services never see two machines edit one file. The folder is treated as untrusted input:
+Every name starts with the machine that writes it, so file-syncing services never see two machines edit one file. A **snapshot** (`-r<time>-<n>`) holds the writer's whole event log (all machines' events) encrypted to the current members; it's written when a machine joins, after a redaction, once a machine has written 200 batch files (compaction), or when the machine's files are missing (repair, which also restores the marker and its own signed membership records). The writer's older files are deleted afterwards. The folder is treated as untrusted input:
 
 - **Create, never overwrite:** written under a temporary dot-name with `O_EXCL|O_NOFOLLOW`, renamed into place only if the name is free.
 - **Delete only own, unchanged files:** `events.db` table `sync_written` records each file this machine wrote (name, SHA-256); a file is removed only if listed and unchanged. Other machines' files are never deleted.

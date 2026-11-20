@@ -98,7 +98,7 @@ def _annotate_hosts(rows: list[dict]) -> list[dict]:
     return annotate_hosts(rows, get_data_dir())
 
 
-def _record_events(source: str, db_path: Path | None = None) -> None:
+def _record_events(source: str, db_path: Path | None = None, *, push: bool = True) -> None:
     """Record any changes to authored data in the event log.
 
     Never raises: the event log must not break the tool that triggered it.
@@ -111,7 +111,7 @@ def _record_events(source: str, db_path: Path | None = None) -> None:
     except Exception:
         logger.exception(f"relay event log: failed to record changes after {source}")
         return
-    if new_ids:
+    if new_ids and push:
         _push_in_background()
 
 
@@ -1790,7 +1790,9 @@ def manage_sync(
             return _sync.format_needs_confirmation(exc.info)
         except _sync.SyncConfigError as exc:
             return {"error": str(exc)}
-        _record_events("manage_sync", db_path)
+        # No background push: setup syncs in the foreground right below, and a
+        # background push would race it and make its report say "Pushed 0".
+        _record_events("manage_sync", db_path, push=False)
         if result.get("transport_available"):
             result["sync_now"] = _sync.run_sync("now", data_dir, db_path)
         if format == "json":

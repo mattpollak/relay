@@ -307,7 +307,12 @@ def join_folder(
                 "Revoke this machine from another one, then set up again with a new identity"
             )
         if role == "pending":
-            folder.write_request(key, host_id, display_name, get_hostname())
+            if folder.write_request(key, host_id, display_name, get_hostname()) == "tampered":
+                raise SyncConfigError(
+                    "this machine's join request in the shared folder was replaced by someone else. "
+                    "Don't approve a machine with this name unless its fingerprint matches the one shown here; "
+                    "ask the folder's owner to remove the planted request"
+                )
         return {
             "role": role,
             "founded": founded,
@@ -413,11 +418,88 @@ def _wire(row: dict) -> dict:
     return {k: row[k] for k in ("id", "host_id", "type", "schema", "key", "parent", "wall_ts", "source", "payload")}
 
 
+# A machine replaces its batch files with one snapshot once it has written this many.
+COMPACT_AFTER = 200
+
+
+def _snapshot(store: EventStore, ctx: _Ctx, me: str, recipients: dict[str, str]) -> tuple[list[str], int]:
+    """Write the whole event log (every machine's events, as this machine holds
+    them) as fresh batches encrypted to the current members, then delete this
+    machine's older batch files. Used for new members, compaction, repair and
+    after a redaction. Returns (files written, events)."""
+    old_files = ctx.folder.own_batches(me)
+    events = event_rows(store)
+    tag = f"-r{_now().replace(':', '').replace('-', '')}"
+    existing = set(ctx.folder._names())
+    chunks = list(_chunks([_wire(e) for e in events]))
+    # Names are <last id>-r<second>-<n>; two snapshots in the same second with no
+    # new events would collide, so move the continuation numbers past any taken.
+    base = 0
+    while any(f"{me}.batch.{c[-1]['id']}{tag}-{base + n}.json" in existing for n, c in enumerate(chunks)):
+        base += 1000
+    written = []
+    for n, chunk in enumerate(chunks):
+        envelope = ctx.sc.seal_batch(ctx.key, me, chunk, recipients, created=_now())
+        written.append(ctx.folder.write_batch(me, envelope, f"{tag}-{base + n}"))
+    for name in old_files:
+        if name not in written:
+            ctx.folder.delete_own(name)  # only if unchanged since this machine wrote it
+    own = [e for e in events if e["host_id"] == me]
+    if own:
+        store.set_meta("sync_pushed", own[-1]["id"])
+    _set_meta_json(store, "sync_recipients", sorted(recipients))
+    return written, len(events)
+
+
+def _repair(store: EventStore, ctx: _Ctx, mem: dict, me: str) -> dict:
+    """Self-heal when the folder or mailbox lost files (wiped, restored from an
+    old backup, a new mailbox): restore the marker, this machine's own signed
+    membership records, and note which of its batch files are gone."""
+    from .sync_folder import MARKER
+
+    names = set(ctx.folder._names())
+    out = {"marker": False, "records": 0, "missing_batches": 0}
+    if MARKER not in names:
+        ctx.folder.initialize()
+        out["marker"] = True
+    for r in mem.get("accepted_records", []):
+        if r.get("by") != me or not isinstance(r.get("at_ms"), int):
+            continue
+        name = f"{me}.member.{r['at_ms']:013d}-{r['kind']}-{r['subject']}.json"
+        if name not in names:
+            try:
+                ctx.folder._create(name, r)
+                out["records"] += 1
+            except SyncError:
+                pass
+    for name in ctx.folder.own_batches(me):
+        if name not in names:
+            ctx.folder.manifest.forget(name)
+            out["missing_batches"] += 1
+    return out
+
+
+def _unseen_member_batches(store: EventStore, ctx: _Ctx, mem: dict, me: str) -> int:
+    """Batches from current members this machine hasn't pulled yet."""
+    seen = {r[0] for r in store.conn.execute("SELECT path FROM sync_seen")}
+    return sum(
+        1 for sender, name in ctx.folder.list_batches(exclude_host=me)
+        if sender in mem["members"] and name not in seen
+    )
+
+
+def _ensure_bound(ctx: _Ctx, me: str) -> None:
+    """Mailbox: bind this machine's token if it isn't yet (e.g. re-issued)."""
+    if hasattr(ctx.folder.storage, "whoami"):
+        ctx.folder.storage.prepare(me)
+
+
 def push(data_dir: Path, db_path: Path | None) -> dict:
     ctx = _open(data_dir, db_path)
     with EventStore(data_dir) as store, store.transaction():
         _attach(store, ctx.folder)
         me = store.host["host_id"]
+        _ensure_bound(ctx, me)
         mem = _membership(store, ctx)
         if mem["error"]:
             _note(store, "sync_last_error", mem["error"])
@@ -441,28 +523,42 @@ def push(data_dir: Path, db_path: Path | None) -> dict:
         recipients = {hid: m["key"] for hid, m in mem["members"].items()}
         previous = set(_meta_json(store, "sync_recipients", []))
         added = sorted(set(recipients) - previous - {me})
-        cursor = store.get_meta("sync_pushed") or ""
-        own_new = event_rows(store, "WHERE host_id = ? AND id > ?", (me, cursor))
+        repaired = _repair(store, ctx, mem, me)
+        own_files = len(ctx.folder.own_batches(me))
         if added:
-            # A machine joined: send it the whole history (minus what it wrote
-            # itself), encrypted to everyone.
-            placeholders = ",".join("?" * len(added))
-            events = event_rows(store, f"WHERE host_id NOT IN ({placeholders})", tuple(added))
-            suffix = f"-h{added[0]}"
+            reason = "history"  # a machine joined: it needs everything, encrypted to it too
+        elif repaired["missing_batches"]:
+            reason = "repair"  # the folder/mailbox lost this machine's files
+        elif own_files >= COMPACT_AFTER:
+            reason = "compact"
         else:
-            events, suffix = own_new, ""
-        written = []
-        for n, chunk in enumerate(_chunks([_wire(e) for e in events])):
-            envelope = ctx.sc.seal_batch(ctx.key, me, chunk, recipients, created=_now())
-            written.append(ctx.folder.write_batch(me, envelope, suffix if n == 0 else f"{suffix}-{n}"))
-        if own_new:
-            store.set_meta("sync_pushed", own_new[-1]["id"])
-        _set_meta_json(store, "sync_recipients", sorted(recipients))
+            reason = None
+        deferred = None
+        if reason and _unseen_member_batches(store, ctx, mem, me):
+            # Only snapshot a log that has everything the other members sent —
+            # otherwise it could re-publish text another machine has since
+            # redacted. The next pull-then-push does it.
+            deferred, reason = reason, None
+        if reason:
+            written, count = _snapshot(store, ctx, me, recipients)
+        else:
+            cursor = store.get_meta("sync_pushed") or ""
+            own_new = event_rows(store, "WHERE host_id = ? AND id > ?", (me, cursor))
+            written = []
+            for n, chunk in enumerate(_chunks([_wire(e) for e in own_new])):
+                envelope = ctx.sc.seal_batch(ctx.key, me, chunk, recipients, created=_now())
+                written.append(ctx.folder.write_batch(me, envelope, "" if n == 0 else f"-{n}"))
+            if own_new:
+                store.set_meta("sync_pushed", own_new[-1]["id"])
+            count = len(own_new)
+        if deferred != "history":  # keep the new member pending until its history is sent
+            _set_meta_json(store, "sync_recipients", sorted(recipients))
         store.set_meta("sync_last_push", _now())
         _note(store, "sync_last_error", None)
         return {
-            "ok": True, "role": role, "batches": len(written), "events": len(events),
-            "git_snapshots": snapshots, "history_for": added, "messages": packed,
+            "ok": True, "role": role, "batches": len(written), "events": count,
+            "git_snapshots": snapshots, "history_for": added if reason == "history" else [],
+            "messages": packed, "snapshot": reason, "snapshot_deferred": deferred, "repaired": repaired,
         }
 
 
@@ -471,6 +567,7 @@ def pull(data_dir: Path, db_path: Path | None) -> dict:
     with EventStore(data_dir) as store, store.transaction():
         _attach(store, ctx.folder)
         me = store.host["host_id"]
+        _ensure_bound(ctx, me)
         mem = _membership(store, ctx)
         if mem["error"]:
             _note(store, "sync_last_error", mem["error"])
@@ -481,6 +578,15 @@ def pull(data_dir: Path, db_path: Path | None) -> dict:
 
         if role == "member":
             ctx.folder.remove_own_request(me)  # approved: the join request has done its job
+        elif role == "pending":
+            # re-ask if the request vanished; flag it if it was swapped
+            if ctx.folder.write_request(ctx.key, me, _own_name(ctx.data_dir), get_hostname()) == "tampered":
+                _note(store, "sync_last_error", (
+                    "this machine's join request in the shared folder was replaced by someone else. "
+                    "Don't approve a machine with this name unless its fingerprint matches the one shown here; "
+                    "ask the folder's owner to remove the planted request"
+                ))
+                return {"ok": False, "role": role, "error": "join request replaced in the shared folder"}
         _reconcile(store, ctx.data_dir, db_path, source="sync")
         seen = {r[0] for r in store.conn.execute("SELECT path FROM sync_seen")}
         stats = {"batches": 0, "waiting": 0, "incomplete": 0, "rejected": 0, "not_for_me": 0}
@@ -532,30 +638,27 @@ def pull(data_dir: Path, db_path: Path | None) -> dict:
 
 
 def reseal_own_batches(data_dir: Path, db_path: Path | None) -> int:
-    """Replace every batch file this machine wrote with fresh ones built from
-    its (scrubbed) event log, then delete the old files. Returns files written."""
+    """Replace every batch file this machine wrote with a fresh snapshot built
+    from its (scrubbed) event log. Returns files written."""
     ctx = _open(data_dir, db_path)
     with EventStore(data_dir) as store, store.transaction():
         _attach(store, ctx.folder)
         me = store.host["host_id"]
+        _ensure_bound(ctx, me)
         mem = _membership(store, ctx)
         if mem["error"] or _role(mem, me, ctx.key.public_b64) != "member":
             return 0
-        old_files = ctx.folder.own_batches(me)
-        events = event_rows(store, "WHERE host_id = ?", (me,))
         recipients = {hid: m["key"] for hid, m in mem["members"].items()}
-        tag = f"-r{_now().replace(':', '').replace('-', '')}"
-        written = []
-        for n, chunk in enumerate(_chunks([_wire(e) for e in events])):
-            envelope = ctx.sc.seal_batch(ctx.key, me, chunk, recipients, created=_now())
-            written.append(ctx.folder.write_batch(me, envelope, f"{tag}-{n}"))
-        for name in old_files:
-            if name not in written:
-                ctx.folder.delete_own(name)  # only if unchanged since this machine wrote it
-        if events:
-            store.set_meta("sync_pushed", events[-1]["id"])
-        _set_meta_json(store, "sync_recipients", sorted(recipients))
+        written, _count = _snapshot(store, ctx, me, recipients)
         return len(written)
+
+
+def _own_name(data_dir: Path) -> str:
+    try:
+        config = json.loads((Path(data_dir) / "relay.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return get_hostname()
+    return config.get("nickname") or get_hostname()
 
 
 def sync_now(data_dir: Path, db_path: Path | None) -> dict:
@@ -611,6 +714,7 @@ def approve(data_dir: Path, db_path: Path | None, who: str) -> dict:
         req = matches[0]
         ctx.folder.write_membership(ctx.key, "approve", me, req["host_id"], req["key"], req["name"])
         _membership(store, ctx)  # accept the new record
+    pull(data_dir, db_path)  # catch up first, so the history snapshot isn't deferred
     pushed = push(data_dir, db_path)  # sends the full history to the new machine
     return {"approved": req, "push": pushed}
 

@@ -561,9 +561,50 @@ def run_sync(direction: str, data_dir: Path | None = None, db_path: Path | None 
     from .sync_folder import FolderError
 
     try:
-        return {"ran": True, **fn(data_dir, db_path)}
+        result = {"ran": True, **fn(data_dir, db_path)}
     except (sync_engine.SyncError, FolderError) as exc:
-        return {"ran": False, "reason": "error", "error": str(exc)}
+        result = {"ran": False, "reason": "error", "error": str(exc)}
+    record_run_status(data_dir, direction, result)
+    return result
+
+
+STATUS_FILE = "sync-status.json"
+
+
+def _run_outcome(result: dict) -> tuple[bool, str | None, str | None]:
+    """(ok, error, role) for a run_sync result."""
+    if not result.get("ran"):
+        return False, result.get("error") or result.get("reason"), None
+    parts = [result[k] for k in ("pull", "push") if isinstance(result.get(k), dict)] or [result]
+    role = next((p.get("role") for p in parts if p.get("role")), None)
+    for part in parts:
+        if not part.get("ok") and not part.get("skipped"):
+            return False, part.get("error") or "sync failed", role
+    return True, None, role
+
+
+def record_run_status(data_dir: Path, direction: str, result: dict) -> None:
+    """Small file the statusline reads with jq: last run, last success, error, role.
+    Never raises."""
+    try:
+        ok, error, role = _run_outcome(result)
+        path = data_dir / STATUS_FILE
+        try:
+            previous = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+        now = _utc_now()
+        status = {
+            "at": now,
+            "direction": direction,
+            "ok": ok,
+            "error": error,
+            "role": role or previous.get("role"),
+            "last_ok_at": now if ok else previous.get("last_ok_at"),
+        }
+        atomic_write(path, json.dumps(status) + "\n")
+    except Exception:
+        pass
 
 
 def format_run_result(result: dict) -> str:
@@ -597,9 +638,14 @@ def format_run_result(result: dict) -> str:
         elif not pushed.get("ok"):
             parts.append(f"Push failed: {pushed.get('error')}")
         else:
+            why = {
+                "history": f"full history for {', '.join(pushed.get('history_for') or [])}",
+                "repair": "the shared folder/mailbox had lost this machine's files, so it was rebuilt",
+                "compact": "older batch files were merged into one",
+            }.get(pushed.get("snapshot"))
             parts.append(
                 f"Pushed {pushed.get('events', 0)} events in {pushed.get('batches', 0)} batches"
-                + (f" (including full history for {', '.join(pushed['history_for'])})" if pushed.get("history_for") else "")
+                + (f" ({why})" if why else "")
             )
     return "\n".join(parts) or "Nothing to do."
 

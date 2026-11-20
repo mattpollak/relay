@@ -272,3 +272,33 @@ def test_revoked_host_id_stays_reserved(hpair):
     assert b.pull()["ok"]
     with pytest.raises(ValueError, match="already has an active token"):
         box.store.add_token("desk3", b.host_id)
+
+
+def test_lost_mailbox_is_rebuilt_from_the_machines(hpair):
+    a, b, box, _, _ = hpair
+    import shutil as _sh
+
+    from relay_server.sync_http import save_token
+
+    _sh.rmtree(box.data / "files")
+    (box.data / "tokens.json").unlink()
+    (box.data / "files").mkdir()
+    # Admin re-issues each machine's token for its host ID (docs: add-token --host)
+    save_token(a.data_dir, box.store.add_token("laptop", a.host_id))
+    save_token(b.data_dir, box.store.add_token("desk", b.host_id))
+    a.write_state("proj", "# proj\n\nafter mailbox loss\n")
+    res = a.push()
+    assert res["ok"] and res["snapshot"] == "repair" and res["repaired"]["marker"]
+    assert b.push()["ok"]
+    assert b.pull()["ok"] and b.state("proj") == "# proj\n\nafter mailbox loss\n"
+    names = {f["name"] for f in box.store.list_files()}
+    assert "relay-sync.json" in names and any(".member." in n for n in names)
+
+
+def test_reissued_unbound_token_binds_on_next_sync(hpair):
+    a, b, box, _, _ = hpair
+    from relay_server.sync_http import save_token
+
+    box.store.revoke_token("desk")
+    save_token(b.data_dir, box.store.add_token("desk2", b.host_id))
+    assert b.pull()["ok"] and b.push()["ok"]

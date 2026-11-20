@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.20.0] - 2026-11-20
+
+### Added
+- **Statusline sync indicator** — With sync on, the statusline shows the last sync (`⇅ 5m`), `⇅ offline (2h)`, `⇅ ⚠ sync error`, `⇅ awaiting approval`, machines waiting to join (`+1 join`), work left on another machine for this workstream (`⚑ desktop`) and conflicts (`⚠ conflict`). Read with jq from a small `sync-status.json` that every sync run writes. Unchanged when sync is off. Re-run `/relay:setup-relay` (or copy `scripts/statusline.sh`) to get it.
+- **Compaction** — Once a machine has written 200 batch files, its next push replaces them with one snapshot of the whole log. Machines that were offline still get everything.
+- **Self-repair** — If the folder or mailbox loses files (wiped, restored from an old backup, replaced with a fresh mailbox), the next push rebuilds the marker, the machine's own signed membership records and a full snapshot; a mailbox token re-issued for the machine's host ID is bound automatically. Any one surviving machine is enough.
+
+### Changed
+- Snapshots (for new members, redaction, compaction, repair) contain every machine's events as the writer holds them, so a new member gets the full history even if the approver snapshots again before it pulls.
+
+### Fixed
+- `/relay:sync setup` reported "Pushed 0 events": a background push started by the same tool call had already sent everything.
+
+### Security
+- **Git snapshots from other machines are sanitized** before they're shown or used: printable branch names only, and commit IDs must be hex (they're passed to local `git` commands, so an option-like value is dropped). The statusline only reads the notice header line.
+- **A replaced join request is detected** — if someone with access to the folder swaps a waiting machine's request for one with their own key, that machine reports it (setup and sync status) instead of waiting silently.
+- **Snapshots wait until the other members' batches are pulled**, so compaction or repair never re-publishes text another machine has since redacted. Approving a machine pulls first.
+
 ## [0.19.0] - 2026-11-20
 
 ### Added

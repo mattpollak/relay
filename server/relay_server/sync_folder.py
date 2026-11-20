@@ -400,15 +400,30 @@ class SyncFolder:
 
     # -- join requests ----------------------------------------------------
 
-    def write_request(self, key: sc.HostKey, host_id: str, name: str, hostname: str) -> None:
+    def write_request(self, key: sc.HostKey, host_id: str, name: str, hostname: str) -> str:
+        """Ask to join (once). Returns "written", "exists", or "tampered" if a
+        different request now sits under this machine's name — someone with
+        access to the folder replaced it, e.g. with their own key."""
         fname = f"{host_id}.request.json"
-        if self.manifest.lookup(fname) is not None and self._read_bytes(fname) is not None:
-            return  # already asked
+        expected = self.manifest.lookup(fname)
+        current = self._read_bytes(fname)
+        if current is not None:
+            if expected is not None and hashlib.sha256(current).hexdigest() == expected:
+                return "exists"
+            rec = None
+            try:
+                rec = json.loads(current)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
+            if expected is None and isinstance(rec, dict) and rec.get("key") == key.public_b64:
+                return "exists"  # ours, from before the manifest knew about it
+            return "tampered"
         record = {
             "host_id": host_id, "key": key.public_b64, "name": name, "hostname": hostname,
             "at_ms": int(time.time() * 1000),
         }
         self._create(fname, sc.sign_record(key, record))
+        return "written"
 
     def requests(self) -> list[dict]:
         out = []
