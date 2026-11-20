@@ -41,4 +41,7 @@ if [ -f "$REGISTRY" ] && [ -n "$SESSION_ID" ] && [ -f "$MARKER_FILE" ]; then
   fi
 fi
 
+# Optional multi-machine sync: push in the background (no-op when sync is off)
+relay_sync_background push
+
 exit 0

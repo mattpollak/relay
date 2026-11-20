@@ -1,5 +1,5 @@
 ---
-description: Interactive setup for relay's optional features (terminal decoration, summary directory).
+description: Interactive setup for relay's optional features (terminal decoration, summary directory, multi-machine sync).
 ---
 
 # Setup Relay
@@ -14,6 +14,7 @@ Interactive setup for relay's optional features. Detects the user's environment 
    >
    > 1. **Terminal decoration** — colored backgrounds and tab titles per workstream
    > 2. **Summary report directory** — where `/relay:summarize` writes reports (e.g., an Obsidian vault)
+   > 3. **Multi-machine sync** (optional, off by default) — share workstreams and memory between your computers
    >
    > Would you like guided setup, or would you prefer the documentation? (See the "Setup" section in the relay README.)
 
@@ -110,7 +111,15 @@ Interactive setup for relay's optional features. Detects the user's environment 
    ```
    If the file doesn't exist, create it with `jq -n`.
 
-6. **Summary.** Show what was configured and any manual steps the user still needs to take. Mention that:
+6. **Multi-machine sync (optional).** Call `manage_sync(action="status")` and show the result. Then ask:
+
+   > Do you use relay on more than one computer and want them to share workstreams, ideas and session notes? Sync is off by default, and relay works fully without it.
+
+   - **No / skip** (the default): leave it off and move on. Don't write any sync settings.
+   - **Yes:** read `${CLAUDE_PLUGIN_ROOT}/commands/sync.md` and follow its **setup** section (nickname → backend → scope → save).
+   - **Already on and the user wants it off:** `manage_sync(action="disable")`.
+
+7. **Summary.** Show what was configured and any manual steps the user still needs to take. Mention that:
    - Terminal decoration takes effect on the next Claude Code session
    - Re-run `/relay:setup-relay` after plugin updates to get the latest statusline script
    - Preferences can be changed later by re-running `/relay:setup-relay` or editing `~/.config/relay/relay.json`

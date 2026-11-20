@@ -96,9 +96,33 @@ def _record_events(source: str, db_path: Path | None = None) -> None:
         from .events import record_changes
         from .workstreams import get_data_dir
 
-        record_changes(get_data_dir(), db_path=db_path, source=source)
+        new_ids = record_changes(get_data_dir(), db_path=db_path, source=source)
     except Exception:
         logger.exception(f"relay event log: failed to record changes after {source}")
+        return
+    if new_ids:
+        _push_in_background()
+
+
+def _push_in_background() -> None:
+    """If sync is on, push in a detached process so the tool returns at once."""
+    try:
+        from .sync import is_sync_enabled
+        from .workstreams import get_data_dir
+
+        if not is_sync_enabled():
+            return
+        import subprocess
+        import sys
+
+        log = open(get_data_dir() / "sync.log", "a")
+        subprocess.Popen(
+            [sys.executable, "-m", "relay_server.sync", "push"],
+            stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+        )
+        log.close()
+    except Exception:
+        logger.exception("relay sync: couldn't start background push")
 
 
 def _clamp_limit(limit: int, default: int = 10) -> int:
@@ -1038,9 +1062,15 @@ def _summarize_activity_impl(
             if slug:
                 lines.append(f"**`{slug}`** ({date_str})")
             else:
-                # No slug — show as individual brief entries
+                # No slug — show as individual brief entries (with the hint's
+                # bullets when there is one, e.g. sessions from another machine)
                 for e in slug_entries:
-                    lines.append(f"- {e['date']}: {e['message_count']} messages (no slug)")
+                    if e["summary"]:
+                        lines.append(f"- {e['date']} (session `{e['session_id'][:8]}`):")
+                        lines.extend(f"  - {b}" for b in e["summary"])
+                        lines.extend(f"  - *Decision: {d}*" for d in e.get("decisions") or [])
+                    else:
+                        lines.append(f"- {e['date']}: {e['message_count']} messages (no slug)")
                 continue
 
             # Collect all bullets and decisions across entries in this slug group
@@ -1437,7 +1467,38 @@ async def switch_workstream(
     finally:
         conn.close()
     _record_events("switch_workstream", db_path)
+    notices = _sync_notices_for(to_name)
+    if notices and isinstance(result, dict):
+        result["sync_notices"] = notices
     return result
+
+
+def _sync_notices_for(workstream: str | None) -> list[str]:
+    """Conflicts and work left on other machines for a workstream (sync only)."""
+    if not workstream:
+        return []
+    try:
+        from .sync import is_sync_enabled
+        from .workstreams import get_data_dir
+
+        data_dir = get_data_dir()
+        if not is_sync_enabled(data_dir):
+            return []
+        from .git_snapshot import FETCH_HINT
+        from .sync_engine import compute_notices, conflict_files
+
+        lines = [
+            f"relay: CONFLICT — {path} holds a version edited on another machine at the same time. "
+            "Show the user the differences, merge what they want, then delete that file."
+            for path in conflict_files(data_dir, workstream)
+        ]
+        n = compute_notices(data_dir, only_ws=workstream).get(workstream)
+        if n:
+            lines += n["lines"] + ([FETCH_HINT] if n["fetch"] else [])
+        return lines
+    except Exception:
+        logger.exception("relay sync: couldn't compute notices")
+        return []
 
 
 @mcp.tool(annotations=_READ_ONLY)
@@ -1644,3 +1705,117 @@ def write_session_hint(
         conn.close()
     _record_events("write_session_hint", db_path)
     return result
+
+
+@mcp.tool(annotations=_WRITE)
+def manage_sync(
+    action: str,
+    ctx: Context[ServerSession, AppContext],
+    backend: str | None = None,
+    folder: str | None = None,
+    url: str | None = None,
+    scope: str = "state",
+    nickname: str | None = None,
+    machine: str | None = None,
+    trust_fingerprint: str | None = None,
+    forget: bool = False,
+    format: str = "markdown",
+) -> dict | str:
+    """Optional multi-machine sync (off by default): status, setup, sync now,
+    approve or revoke a machine, disable.
+
+    Until sync is set up, relay is local-only and makes no network calls.
+    The folder backend exchanges signed, encrypted files through a shared
+    folder (OneDrive, Syncthing, a NAS share); relay itself never connects
+    to anything.
+
+    Args:
+        action: "status", "setup", "now" (pull then push), "approve", "revoke", or "disable"
+        backend: "folder" (a shared/synced directory) or "http" (NAS mailbox, not available yet). Required for "setup".
+        folder: Absolute path to the shared folder (backend="folder"). Created if its parent exists.
+        url: Mailbox URL, https only (backend="http")
+        scope: "state" (workstreams, state, ideas, hints, tags) or "state+messages". Default "state".
+        nickname: Display name for this machine. Omit to keep the current one, "" to clear it.
+        machine: For "approve"/"revoke": the machine's name, host ID, or fingerprint prefix
+        trust_fingerprint: For "setup" when joining an existing folder: the founder's key
+            fingerprint, which the user must read off the founding machine (`/relay:sync status`)
+            and confirm. Never fill this in from the tool's own output without the user confirming.
+        forget: With "disable", also remove the saved sync settings (local data is always kept)
+        format: "markdown" (default) or "json"
+    """
+    from . import sync as _sync
+    from .workstreams import get_data_dir
+
+    data_dir = get_data_dir()
+    db_path = _get_db_path(ctx) if ctx is not None else None
+
+    if action == "status":
+        status = _sync.sync_status(data_dir)
+        return status if format == "json" else _sync.format_status(status)
+
+    if action == "setup":
+        if not backend:
+            return {"error": "setup needs backend='folder' or backend='http'"}
+        from .sync_engine import NeedsConfirmation
+
+        try:
+            result = _sync.setup_sync(
+                data_dir, backend=backend, folder=folder, url=url, scope=scope, nickname=nickname,
+                trust_fingerprint=trust_fingerprint,
+            )
+        except NeedsConfirmation as exc:
+            if format == "json":
+                return {"confirm_founder": exc.info}
+            return _sync.format_needs_confirmation(exc.info)
+        except _sync.SyncConfigError as exc:
+            return {"error": str(exc)}
+        _record_events("manage_sync", db_path)
+        if result.get("transport_available"):
+            result["sync_now"] = _sync.run_sync("now", data_dir, db_path)
+        if format == "json":
+            return result
+        text = _sync.format_setup_result(result)
+        if result.get("sync_now"):
+            text += "\n" + _sync.format_run_result(result["sync_now"])
+        return text
+
+    if action == "now":
+        result = _sync.run_sync("now", data_dir, db_path)
+        return result if format == "json" else _sync.format_run_result(result)
+
+    if action in ("approve", "revoke"):
+        if not machine:
+            return {"error": f"{action} needs machine=<name, host ID or fingerprint>"}
+        if not _sync.is_sync_enabled(data_dir):
+            return {"error": _sync._NOT_SET_UP}
+        from . import sync_engine
+
+        try:
+            fn = sync_engine.approve if action == "approve" else sync_engine.revoke
+            result = fn(data_dir, db_path, machine)
+        except sync_engine.SyncError as exc:
+            return {"error": str(exc)}
+        if format == "json":
+            return result
+        if action == "approve":
+            r = result["approved"]
+            return (
+                f"Approved **{r['name']}** (host ID `{r['host_id']}`, fingerprint `{r['fingerprint']}`). "
+                "Its full history was sent; it picks everything up on its next sync.\n"
+                + _sync.format_run_result({"ran": True, **result["push"]})
+            )
+        r = result["revoked"]
+        return (
+            f"Revoked **{r['name']}** (host ID `{r['host_id']}`). Nothing new is encrypted to it from now on. "
+            "It keeps whatever it already synced. If the machine was lost or stolen, also remove its access "
+            "to the shared folder (or Tailscale, for the NAS mailbox)."
+        )
+
+    if action == "disable":
+        try:
+            result = _sync.disable_sync(data_dir, forget=forget)
+        except _sync.SyncConfigError as exc:
+            return {"error": str(exc)}
+        return result if format == "json" else result["message"]
+
+    return {"error": f"unknown action {action!r}; use status, setup, now, approve, revoke, or disable"}

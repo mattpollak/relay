@@ -17,7 +17,7 @@ WRITE_IDEMPOTENT_TOOLS = {
 
 WRITE_NON_IDEMPOTENT_TOOLS = {
     "create_workstream", "park_workstream", "switch_workstream",
-    "manage_idea", "manage_worktree",
+    "manage_idea", "manage_worktree", "manage_sync",
 }
 
 ALL_TOOLS = READ_ONLY_TOOLS | WRITE_IDEMPOTENT_TOOLS | WRITE_NON_IDEMPOTENT_TOOLS

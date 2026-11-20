@@ -29,4 +29,7 @@ else
   echo "IMPORTANT: Context compaction imminent. Save your workstream state now with /relay:save."
 fi
 
+# Optional multi-machine sync: push in the background (no-op when sync is off)
+relay_sync_background push
+
 exit 0

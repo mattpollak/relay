@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.17.0] - 2026-11-20
+
+### Added
+- **Optional multi-machine sync** (off by default) — Share workstreams, state files, plan/architecture files, ideas, session hints and manual tags between your computers through a shared folder (OneDrive, Syncthing, a NAS share). Set up with `/relay:sync setup` or the new sync step in `/relay:setup-relay`. Local-only stays fully supported: without setup nothing new runs, nothing is installed, and hooks skip sync with a single `jq` check.
+- **Encrypted, signed, per-machine keys** — Each machine has its own key (`~/.config/relay/sync.key`). Batches are zlib-compressed, encrypted to every approved machine and signed by the sender; the shared folder only ever holds ciphertext. Uses PyNaCl (libsodium), an optional `sync` extra installed into relay's environment the first time sync is set up.
+- **Approve / revoke machines** — The first machine founds the group. A joining machine must confirm the founder's key fingerprint (so a folder pre-created by someone else is caught) and sends and receives nothing until approved (`/relay:sync approve <name>`, after comparing fingerprints). `/relay:sync revoke <name>` stops encrypting to a machine and ignores anything it writes afterwards; each machine keeps its own copy of accepted membership records, so deleting a revoke from the shared folder doesn't undo it.
+- **Names from other machines are sanitized** — machine names and hostnames read from the shared folder are shown as one short line (≤ 32 printable characters) wherever they reach Claude or the user.
+- **`/relay:sync`** command and **`manage_sync`** MCP tool — `status`, `setup`, `now` (pull + push), `approve`, `revoke`, `disable [--forget]`.
+- **Conflict handling** — If a state file is edited on two machines from the same version, the newer edit wins and the other is saved as `<file>.conflict-<machine>-<time>.md`; session start and `/relay:switch` point it out.
+- **Work left on another machine** — Each push records a git snapshot per workstream repo (uncommitted files, unpushed commits, stashes). Session start and `switch_workstream` report e.g. "work on desk not visible here: 2 unpushed commits". relay never runs `git fetch`; when one is needed it says so and Claude offers to run it.
+- **When sync runs** — Pull at session start (capped at 5 s) so the loaded state is current; background push after relay tools change data, before compaction and at session end.
+
+### Changed
+- **Per-machine fields aren't shared** — `project_dir`, worktree paths and stash refs are recorded per machine (`wsdir/<host>/<name>` events) instead of in the shared workstream value; idea numbers stay per machine (ideas are matched by `uid`). A workstream new to a machine borrows another machine's `project_dir` when that path exists locally.
+- **The plugin's MCP server and hooks run with `uv run --no-dev`** — relay no longer installs its test dependencies into the plugin environment.
+- **`summarize_activity` shows hints for sessions without a slug** (including sessions from other machines) instead of only a message count.
+
 ## [0.16.0] - 2026-11-20
 
 ### Added

@@ -86,8 +86,46 @@ _TYPES = {
     "stag": ("tag.session", None),
     "mtag": ("tag.message", None),
     "host": ("host.info", None),
+    "wsdir": ("ws.local", "ws.local.delete"),
+    "git": ("git.snapshot", None),
 }
 _UPDATE_TYPES = {"ws": "ws.update", "idea": "idea.update"}
+
+
+# Registry fields that only make sense on one machine. They're recorded under
+# ``wsdir/<host_id>/<name>`` instead of the shared ``ws/<name>`` value, so
+# machines with different paths (or their own stashes) don't overwrite each other.
+_HOST_LOCAL_TOP = ("project_dir",)
+_HOST_LOCAL_GIT = ("worktree_path", "stash_ref", "stash_message")
+
+# Ideas: the numeric ``id`` users type is assigned per machine; ``uid`` is the
+# shared identity, so ``id`` is never synced.
+_IDEA_LOCAL = ("id",)
+
+WS_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def split_ws_entry(entry: dict) -> tuple[dict, dict]:
+    """Split a registry entry into (shared, host-local) parts."""
+    shared = {k: v for k, v in entry.items() if k not in _HOST_LOCAL_TOP}
+    local = {k: entry[k] for k in _HOST_LOCAL_TOP if k in entry}
+    git = entry.get("git")
+    if isinstance(git, dict):
+        shared["git"] = {k: v for k, v in git.items() if k not in _HOST_LOCAL_GIT}
+        local_git = {k: git[k] for k in _HOST_LOCAL_GIT if k in git}
+        if local_git:
+            local["git"] = local_git
+    return shared, local
+
+
+def join_ws_entry(shared: dict, local: dict) -> dict:
+    entry = dict(shared)
+    for k in _HOST_LOCAL_TOP:
+        if k in local:
+            entry[k] = local[k]
+    if isinstance(local.get("git"), dict):
+        entry["git"] = {**(shared.get("git") or {}), **local["git"]}
+    return entry
 
 
 # ---------------------------------------------------------------------------
@@ -358,8 +396,16 @@ def collect_current(
     registry_ok = ok and isinstance(registry, dict) and isinstance(registry.get("workstreams"), dict)
     if registry_ok:
         authoritative.update({"ws/", "state/", "file/"})
+        if host is not None:
+            authoritative.add(f"wsdir/{host['host_id']}/")
         for name, entry in registry["workstreams"].items():
-            values[f"ws/{name}"] = entry
+            if not isinstance(entry, dict):
+                values[f"ws/{name}"] = entry
+                continue
+            shared, local = split_ws_entry(entry)
+            values[f"ws/{name}"] = shared
+            if host is not None and local:
+                values[f"wsdir/{host['host_id']}/{name}"] = local
 
     ws_root = data_dir / "workstreams"
     if ws_root.is_dir():
@@ -377,7 +423,7 @@ def collect_current(
         authoritative.add("idea/")
         for idea in ideas or []:
             if isinstance(idea, dict) and idea.get("uid"):
-                values[f"idea/{idea['uid']}"] = idea
+                values[f"idea/{idea['uid']}"] = {k: v for k, v in idea.items() if k not in _IDEA_LOCAL}
 
     # Legacy hint files (pre-MCP) — indexing them may have failed (FK) so
     # read them directly.
@@ -604,63 +650,99 @@ def restore_authored_rows(data_dir: Path, conn: sqlite3.Connection) -> dict:
     reindex() wipes session_hints and manual message tags; rows written by MCP
     tools existed only in the DB, so they were lost. The log has them.
     """
-    from .db import ensure_session
-
     store = EventStore(data_dir)
     try:
         heads = store.heads()
     finally:
         store.close()
+    own = _own_host_id(data_dir)
 
     counts = {"hints": 0, "session_tags": 0, "message_tags": 0}
+    for key, (event_id, raw) in heads.items():
+        if raw is None:
+            continue
+        # Hints from other machines refer to sessions this index doesn't have.
+        remote = own is not None and not event_id.endswith(f"-{own}")
+        kind = restore_item(conn, key, json.loads(raw), create_session=remote)
+        if kind:
+            counts[kind] += 1
+    conn.commit()
+    return counts
+
+
+def _own_host_id(data_dir: Path) -> str | None:
+    ok, config = _read_json(Path(data_dir) / "relay.json")
+    host_id = config.get("host_id") if ok and isinstance(config, dict) else None
+    return host_id if isinstance(host_id, str) else None
+
+
+def restore_item(
+    conn: sqlite3.Connection, key: str, value: Any, *, create_session: bool = False,
+) -> str | None:
+    """Write one hint or manual tag into index.db. Returns which kind was
+    written ("hints", "session_tags", "message_tags") or None. No commit."""
+    from .db import ensure_session
 
     def session_exists(sid: str) -> bool:
         return conn.execute("SELECT 1 FROM sessions WHERE session_id = ?", (sid,)).fetchone() is not None
 
-    for key, (_eid, raw) in heads.items():
-        if raw is None:
-            continue
-        value = json.loads(raw)
-        if key.startswith("hint/"):
-            source_file = key[len("hint/"):]
-            sid = value["session_id"]
-            if source_file.startswith("mcp-"):
-                ensure_session(conn, sid)  # same as when the hint was first written
-            elif not session_exists(sid):
-                continue
-            conn.execute(
-                """INSERT INTO session_hints (session_id, timestamp, source_file, workstream, summary, decisions)
-                   VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(source_file) DO UPDATE SET
-                     workstream = excluded.workstream, summary = excluded.summary,
-                     decisions = excluded.decisions""",
-                (
-                    sid, value.get("timestamp", ""), source_file, value.get("workstream", ""),
-                    json.dumps(value.get("summary") or []),
-                    json.dumps(value["decisions"]) if value.get("decisions") else None,
-                ),
-            )
-            counts["hints"] += 1
-        elif key.startswith("stag/"):
-            if session_exists(value["session_id"]):
-                cur = conn.execute(
-                    "INSERT OR IGNORE INTO session_tags (session_id, tag, source) VALUES (?, ?, ?)",
-                    (value["session_id"], value["tag"], value.get("source", "manual")),
+    if not isinstance(value, dict):
+        return None
+    if key.startswith("hint/"):
+        source_file = key[len("hint/"):]
+        sid = value.get("session_id")
+        if not isinstance(sid, str) or not sid:
+            return None
+        if source_file.startswith("mcp-") or create_session:
+            ensure_session(conn, sid)  # same as when the hint was first written
+            ts = value.get("timestamp")
+            if create_session and isinstance(ts, str) and ts:
+                # A session from another machine: date the placeholder by its
+                # hint so date-filtered views (summarize_activity) include it.
+                conn.execute(
+                    """UPDATE sessions SET first_timestamp = COALESCE(first_timestamp, ?),
+                           last_timestamp = COALESCE(last_timestamp, ?)
+                       WHERE session_id = ?""",
+                    (ts, ts, sid),
                 )
-                counts["session_tags"] += cur.rowcount
-        elif key.startswith("mtag/"):
-            for m in conn.execute(
-                "SELECT id, content FROM messages WHERE session_id = ? AND timestamp = ? AND role = ?",
-                (value["session_id"], value["timestamp"], value["role"]),
-            ).fetchall():
-                if message_key(value["session_id"], value["timestamp"], value["role"], m[1]) == value["message_key"]:
-                    cur = conn.execute(
-                        "INSERT OR IGNORE INTO message_tags (message_id, tag, source) VALUES (?, ?, ?)",
-                        (m[0], value["tag"], value.get("source", "manual")),
-                    )
-                    counts["message_tags"] += cur.rowcount
-    conn.commit()
-    return counts
+        elif not session_exists(sid):
+            return None
+        conn.execute(
+            """INSERT INTO session_hints (session_id, timestamp, source_file, workstream, summary, decisions)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source_file) DO UPDATE SET
+                 workstream = excluded.workstream, summary = excluded.summary,
+                 decisions = excluded.decisions""",
+            (
+                sid, value.get("timestamp", ""), source_file, value.get("workstream", ""),
+                json.dumps(value.get("summary") or []),
+                json.dumps(value["decisions"]) if value.get("decisions") else None,
+            ),
+        )
+        return "hints"
+    if key.startswith("stag/"):
+        if session_exists(value.get("session_id", "")):
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO session_tags (session_id, tag, source) VALUES (?, ?, ?)",
+                (value["session_id"], value["tag"], value.get("source", "manual")),
+            )
+            return "session_tags" if cur.rowcount else None
+        return None
+    if key.startswith("mtag/"):
+        written = None
+        for m in conn.execute(
+            "SELECT id, content FROM messages WHERE session_id = ? AND timestamp = ? AND role = ?",
+            (value.get("session_id"), value.get("timestamp"), value.get("role")),
+        ).fetchall():
+            if message_key(value["session_id"], value["timestamp"], value["role"], m[1]) == value.get("message_key"):
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO message_tags (message_id, tag, source) VALUES (?, ?, ?)",
+                    (m[0], value["tag"], value.get("source", "manual")),
+                )
+                if cur.rowcount:
+                    written = "message_tags"
+        return written
+    return None
 
 
 # ---------------------------------------------------------------------------

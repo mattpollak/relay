@@ -46,6 +46,10 @@ if [ -d "$OLD_DATA_DIR" ] && [ ! -d "$DATA_DIR" ]; then
   exit 0
 fi
 
+# Optional multi-machine sync: pull first so the state below is current
+# (no-op when sync is off)
+relay_sync_pull_now
+
 # Check registry exists
 if [ ! -f "$REGISTRY" ]; then
   exit 0
@@ -98,6 +102,13 @@ else
     echo "  - **$ws**: $DESC"
   done)
   CONTEXT=$(printf "relay: Multiple active workstreams detected. Ask the user which one to work on for this session.\n\n%s\n\nOnce the user picks, call switch_workstream(to_name=\"<name>\", session_id=\"<session_id>\") to attach to it.\nUse the session ID shown below." "$ACTIVE_LIST")
+fi
+
+# Sync notices: conflicts / work on other machines for the attached
+# workstream, join requests, problems (nothing when sync is off)
+SYNC_NOTES=$(relay_sync_notices "${ACTIVE_NAME:-}")
+if [ -n "$SYNC_NOTES" ]; then
+  CONTEXT=$(printf "%s\n\n%s" "${CONTEXT:-}" "$SYNC_NOTES")
 fi
 
 # Append session ID so skills can reference it for hint files

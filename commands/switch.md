@@ -32,5 +32,6 @@ Switch this session from the current workstream to the one named `$ARGUMENTS`. B
    - If `dirty_warning`: Suggest stashing changes before switching branches
    - If `worktree_path`: Note the working directory the user should work in
    - If `stash_reminder`: Show the reminder about stashed changes from a previous session
+   - If `sync_notices` (multi-machine sync only): show them. They cover conflicting edits made on another machine and work left uncommitted or unpushed there. If one says a `git fetch` is needed, **offer** to run it; never run it without the user saying yes.
 
 3. **Present.** Show the target workstream's current status from the returned state. If `project_dir` is set, mention it. If supplementary files were returned, note their presence.

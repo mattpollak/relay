@@ -16,6 +16,7 @@ from relay_server.events import (
     ensure_host_identity,
     record_changes,
     restore_authored_rows,
+    split_ws_entry,
 )
 
 ID_RE = re.compile(r"^\d{13}-\d{4}-[a-z2-7]{6}$")
@@ -261,7 +262,9 @@ def test_registry_change_records_only_changed_fields(tmp_path):
         e = store.events()[-1]
         assert e["type"] == "ws.update"
         assert json.loads(e["payload"]) == {"set": {"status": "active", "color": "#112233"}, "unset": ["git"]}
-        assert store.head_value("ws/beta") == reg["workstreams"]["beta"]
+        shared, _local = split_ws_entry(reg["workstreams"]["beta"])
+        assert "project_dir" not in shared  # host-local, recorded under wsdir/
+        assert store.head_value("ws/beta") == shared
 
 
 def test_deletions_become_tombstones(tmp_path):

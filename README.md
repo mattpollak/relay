@@ -173,6 +173,7 @@ claude --plugin-dir /path/to/relay
 | `/relay:idea promote 2` | Promote an idea to a full workstream |
 | `/relay:summarize 48h` | Summarize recent activity grouped by workstream (standup prep, brag books) |
 | `/relay:backfill 7d` | Generate session hints for older sessions (one-time cost for efficient future summaries) |
+| `/relay:sync` | Optional multi-machine sync: `status`, `setup`, `now`, `approve`, `revoke`, `disable` (off by default) |
 
 ### Natural language
 
@@ -198,6 +199,7 @@ The MCP server provides tools that Claude uses directly during your session — 
 | `switch_workstream` | Save current workstream, activate target, write session marker, return target state. Returns git warnings and stash reminders. |
 | `list_workstreams` | List all workstreams grouped by status (active, parked, completed) plus ideas. Shows branch/worktree info inline. Returns pre-formatted markdown by default; pass `format="json"` for structured data |
 | `manage_worktree` | Attach, detach, remove, or list relay-managed git worktrees |
+| `manage_sync` | Optional multi-machine sync through a shared folder: status, setup, sync now, approve/revoke a machine, disable |
 | `update_workstream` | Update workstream fields (description, project_dir, color, git strategy). Only provided fields are changed. |
 | `manage_idea` | Add, remove, or list ideas for future work |
 | `summarize_activity` | Summarize recent activity grouped by workstream. Always writes markdown to file; returns full markdown inline (≤200 lines) or overview + file path (longer). Pass `format="json"` for structured data |
@@ -250,6 +252,9 @@ Configuration lives at `${XDG_CONFIG_HOME:-$HOME/.config}/relay/`:
 ├── relay.json                    # Server-level config + this machine's host_id (see below)
 ├── events.db                     # Event log of every change to authored data (SQLite)
 ├── backups/                      # One-time backup taken before the event log was first created
+├── sync.key                      # Only with sync on: this machine's private key (0600, never leaves the machine)
+├── sync-notices.json             # Only with sync on: conflicts / other-machine notices for the session-start hook
+├── sync.log                      # Only with sync on: background push/pull results
 ├── workstreams.json              # Central registry
 ├── ideas.json                    # Pre-workstream ideas (shown in /relay:list)
 ├── session-markers/              # Links session IDs to workstreams (written by session-start hook and MCP tools)
@@ -269,7 +274,7 @@ The conversation search index lives at `~/.local/share/relay/index.db` (SQLite, 
 
 ### Event log
 
-Every change to authored data (registry entries, `state.md`, `plan.md`, `architecture.md`, ideas, session hints, manual tags) is appended to `events.db` as an immutable event with a time-sortable ID (`<unix-ms>-<counter>-<host-id>`). Relay records changes after each of its tools runs and at startup, by comparing the files on disk with the log, so edits made outside relay are captured too. The files stay the source that hooks and tools read. The log is groundwork for optional multi-machine sync and never leaves the machine on its own. See [references/formats.md](references/formats.md#eventsdb).
+Every change to authored data (registry entries, `state.md`, `plan.md`, `architecture.md`, ideas, session hints, manual tags) is appended to `events.db` as an immutable event with a time-sortable ID (`<unix-ms>-<counter>-<host-id>`). Relay records changes after each of its tools runs and at startup, by comparing the files on disk with the log, so edits made outside relay are captured too. The files stay the source that hooks and tools read. The log is what optional multi-machine sync exchanges; it never leaves the machine unless you set up sync (see below). See [references/formats.md](references/formats.md#eventsdb).
 
 Activity summaries are written to `~/.local/share/relay/summaries/` by default (configurable — see below).
 
@@ -286,10 +291,25 @@ Optional server-level settings in `~/.config/relay/relay.json`:
 | Key | What it does | Default |
 |---|---|---|
 | `summary_dir` | Directory for `/relay:summarize` output files | `~/.local/share/relay/summaries` |
-| `nickname` | Display name for this machine (used by future multi-machine features) | the machine's hostname |
+| `nickname` | Display name for this machine in sync status | the machine's hostname |
 | `host_id` | Stable random ID for this machine, written automatically on first run. Don't edit or copy it to another machine. | generated |
+| `sync` | Optional multi-machine sync settings, written by `/relay:sync setup`. Absent means local-only: no network calls, nothing extra runs. | absent (off) |
 
 The file is optional — relay works fine without it. Missing or malformed files are silently ignored. The `output_dir` parameter on `summarize_activity` overrides the config value.
+
+## Multi-machine sync (optional)
+
+Off by default. If you use relay on more than one computer, sync shares workstreams, state files, ideas, session hints, tags and git snapshots between them through a **shared folder** — OneDrive, Syncthing, a NAS share, anything that syncs files. Run `/relay:sync setup` on each machine (or the sync step of `/relay:setup-relay`).
+
+- **Local-only stays fully supported.** Without setup, nothing below happens: no keys, no extra dependency, no background work.
+- **Encrypted and signed.** Each machine has its own key. Everything written to the folder is compressed, encrypted to the approved machines, and signed by the machine that wrote it, so the folder's host (Microsoft, your NAS) can't read or alter it. Uses [PyNaCl](https://pynacl.readthedocs.io/) (libsodium), installed into relay's own environment the first time you set up sync.
+- **Approve and revoke.** The first machine founds the group. Joining machines confirm the founder's fingerprint, then ask to join; they send and receive nothing until an existing machine runs `/relay:sync approve <name>` (compare the fingerprints both machines show). `/relay:sync revoke <name>` stops encrypting to a machine and ignores anything it writes from then on — even if the revoke record is later deleted from the shared folder.
+- **When it runs.** Pull at session start (capped at a few seconds) so the loaded state is current; push after relay saves, before compaction and at session end, in the background. `/relay:sync now` syncs immediately — handy before leaving the house.
+- **Conflicts.** If a state file was edited on two machines from the same version, the newer edit wins and the other is kept as `state.conflict-<machine>-<time>.md`; session start points it out.
+- **Work left on another machine.** Each push records a git snapshot per workstream repo (uncommitted files, unpushed commits, stashes). At session start and on `/relay:switch` you'll see e.g. "work on desk not visible here: branch feat/x: 2 unpushed commits". relay never runs `git fetch` itself; when one is needed it says so and Claude offers to run it.
+- **Per-machine settings stay per machine:** `project_dir`, worktree paths, stashes, idea numbers.
+
+Not yet available: the NAS mailbox (`http`) backend and sharing conversation messages for cross-machine search.
 
 ## How It Works
 
