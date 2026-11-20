@@ -207,3 +207,44 @@ def test_cwd_changed_deepest_match_wins(tmp_path):
     parsed = json.loads(output)
     msg = parsed["systemMessage"]
     assert '"child"' in msg
+
+
+def _two_active(tmp_path):
+    data_dir = tmp_path / "relay"
+    (data_dir / "workstreams" / "alpha").mkdir(parents=True)
+    (data_dir / "workstreams" / "beta").mkdir(parents=True)
+    (data_dir / "workstreams" / "beta" / "state.md").write_text("# beta state\n")
+    (data_dir / "workstreams.json").write_text(json.dumps({"version": 1, "workstreams": {
+        "alpha": {"status": "active", "description": "A"}, "beta": {"status": "active", "description": "B"},
+    }}))
+    return data_dir
+
+
+def test_session_start_resumed_session_reattaches(tmp_path):
+    """/exit deletes the statusline mapping; on resume the marker re-attaches."""
+    data_dir = _two_active(tmp_path)
+    sid = "abc12345-1234-1234-1234-123456789abc"
+    (data_dir / "session-markers").mkdir()
+    (data_dir / "session-markers" / f"{sid}.json").write_text(json.dumps({"workstream": "beta"}))
+    out = _run_hook_script("session-start.sh", {"session_id": sid, "source": "resume"},
+                           {"XDG_CONFIG_HOME": str(tmp_path)})
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "Active workstream 'beta'" in ctx and "# beta state" in ctx
+    assert (data_dir / "session-workstreams" / sid).read_text() == "beta"
+
+
+def test_session_start_new_session_with_several_active_still_asks(tmp_path):
+    data_dir = _two_active(tmp_path)
+    out = _run_hook_script("session-start.sh", {"session_id": "def12345-1234-1234-1234-123456789abc"},
+                           {"XDG_CONFIG_HOME": str(tmp_path)})
+    assert "Multiple active workstreams" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert not (data_dir / "session-workstreams").exists()
+
+
+def test_session_start_ignores_marker_for_unknown_workstream(tmp_path):
+    data_dir = _two_active(tmp_path)
+    sid = "abc12345-1234-1234-1234-123456789abc"
+    (data_dir / "session-markers").mkdir()
+    (data_dir / "session-markers" / f"{sid}.json").write_text(json.dumps({"workstream": "gone"}))
+    out = _run_hook_script("session-start.sh", {"session_id": sid}, {"XDG_CONFIG_HOME": str(tmp_path)})
+    assert "Multiple active workstreams" in json.loads(out)["hookSpecificOutput"]["additionalContext"]

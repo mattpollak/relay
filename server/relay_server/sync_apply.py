@@ -220,6 +220,8 @@ def apply_remote(
             changes[key] = new_value
 
     host_id = store.host["host_id"] if store.host else None
+    for key in merge_imported_duplicate_ideas(store):
+        changes[key] = None
     written = materialize(store, data_dir, db_path, changes, host_id)
     if text_pairs:
         from .redact import scrub_side_copies
@@ -269,6 +271,38 @@ def _check_conflict(
     if not isinstance(loser_value, str) or not loser_value.strip() or loser_value == winner_value:
         return None
     return {"key": key, "event_id": loser_id, "value": loser_value}
+
+
+def merge_imported_duplicate_ideas(store: EventStore) -> list[str]:
+    """The same pre-existing idea, imported on two machines before ideas had
+    content-derived uids, shows up twice after they sync. Keep the smallest
+    uid and tombstone the others — only for ideas that exist purely because of
+    an import on different machines (never ones somebody added). Deterministic,
+    so every machine ends up with the same idea. Returns the keys deleted."""
+    groups: dict[tuple, list[str]] = {}
+    for key, (_eid, raw) in store.heads().items():
+        if not key.startswith("idea/") or raw is None:
+            continue
+        value = json.loads(raw)
+        if isinstance(value, dict):
+            groups.setdefault((value.get("text"), value.get("added")), []).append(key)
+    deleted = []
+    for keys in groups.values():
+        if len(keys) < 2:
+            continue
+        imported = []
+        for key in keys:
+            rows = store.conn.execute("SELECT source, host_id FROM events WHERE key = ?", (key,)).fetchall()
+            if rows and all(r["source"] == "import" for r in rows):
+                imported.append((key, rows[0]["host_id"]))
+        if len(imported) < 2 or len({h for _k, h in imported}) < 2:
+            continue
+        keep = min(k for k, _h in imported)
+        for key, _h in imported:
+            if key != keep:
+                store.append("idea.delete", key, {}, source="sync")
+                deleted.append(key)
+    return deleted
 
 
 def _host_label(store: EventStore, host_id: str) -> str:

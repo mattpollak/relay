@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.2] - 2026-11-20
+
+### Fixed
+- **Resumed sessions lost their workstream.** `/exit` removes the session's statusline mapping, and on resume relay only re-attached automatically when exactly one workstream was active. SessionStart now re-attaches the workstream recorded in the session's marker (resume, `/clear`, compaction), so the statusline and context show it again.
+- **The same idea showed up twice after two machines synced.** Ideas that predate uids were given random uids on each machine's import. Missing uids are now derived from the idea's text and date, so identical ideas match; existing duplicates that exist only through imports on different machines are merged on the next sync (the smallest uid is kept; ideas you added are never merged).
+- **Search for words with punctuation failed** (`relay-mailbox` → "no such column", `tail3e79dd.ts.net`, `c++`). Such words are now searched as quoted phrases; AND/OR/NOT, parentheses, `"phrases"` and trailing `*` work as before.
+
 ## [0.20.1] - 2026-11-20
 
 ### Fixed

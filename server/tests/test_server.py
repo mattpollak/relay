@@ -96,3 +96,15 @@ def test_parse_session_range_garbage():
 def test_parse_session_range_reversed_range():
     with pytest.raises(ValueError, match="Invalid range"):
         _parse_session_range("5-3", 6)
+
+
+def test_fts_query_quotes_punctuated_words():
+    from relay_server.server import fts_query
+
+    assert fts_query("relay-mailbox") == '"relay-mailbox"'
+    assert fts_query("tail3e79dd.ts.net setup") == '"tail3e79dd.ts.net" setup'
+    assert fts_query("sk-live*") == '"sk-live"*'
+    assert fts_query("(relay OR nas) NOT tailscale") == "(relay OR nas) NOT tailscale"
+    assert fts_query("(relay-mailbox OR nas)") == '("relay-mailbox" OR nas)'
+    assert fts_query('"exact phrase" foo-bar') == '"exact phrase" foo-bar'  # user quoting kept as is
+    assert fts_query("gigawatt* coupling") == "gigawatt* coupling"

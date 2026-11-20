@@ -993,3 +993,66 @@ def test_join_keeps_real_edits_over_a_later_import(a, b, folder):
     assert (a.data_dir / "workstreams" / "deskonly" / "state.md").exists()
     assert _shared_keys(a.heads()) == _shared_keys(b.heads())
     assert a.fold_ok() and b.fold_ok()
+
+
+# ---------------------------------------------------------------------------
+# Ideas imported on two machines
+# ---------------------------------------------------------------------------
+
+
+def _ideas_file(host: Host, ideas: list[dict]) -> None:
+    (host.data_dir / "ideas.json").write_text(json.dumps(ideas))
+
+
+def test_same_preexisting_idea_gets_the_same_uid_on_both_machines(a, b, folder):
+    for h in (a, b):
+        _ideas_file(h, [{"id": 1, "text": "Roblox game", "added": "2026-03-05"}])
+        _preexisting(h, {"proj": "# proj\n"})
+    a.setup(folder)
+    a.push()
+    b.setup(folder, trust=a)
+    sync_engine.approve(a.data_dir, a.db_path, "desk")
+    b.pull()
+    b.push()
+    a.pull()
+    assert [i["text"] for i in a.ideas()] == [i["text"] for i in b.ideas()] == ["Roblox game"]
+    from relay_server.events import content_idea_uid
+
+    expected = content_idea_uid({"text": "Roblox game", "added": "2026-03-05"})
+    assert a.ideas()[0]["uid"] == b.ideas()[0]["uid"] == expected
+    with EventStore(a.data_dir) as store:  # same key on both: nothing had to be merged
+        assert not store.conn.execute("SELECT 1 FROM events WHERE type = 'idea.delete'").fetchone()
+
+
+def test_duplicate_imported_ideas_with_random_uids_are_merged(a, b, folder):
+    # As relay <= 0.20.1 did: each machine gave the same idea a random uid.
+    _ideas_file(a, [{"id": 1, "text": "Roblox game", "added": "2026-03-05", "uid": "b84b50606b9345f6"}])
+    _ideas_file(b, [{"id": 1, "text": "Roblox game", "added": "2026-03-05", "uid": "30180da44f89809c"},
+                    {"id": 2, "text": "only on desk", "added": "2026-03-06", "uid": "1111111111111111"}])
+    _preexisting(a, {"proj": "# proj\n"})
+    _preexisting(b, {"proj": "# proj\n"})
+    a.setup(folder)
+    a.push()
+    b.setup(folder, trust=a)
+    sync_engine.approve(a.data_dir, a.db_path, "desk")
+    b.pull()
+    b.push()
+    a.pull()
+    for h in (a, b):
+        roblox = [i for i in h.ideas() if i["text"] == "Roblox game"]
+        assert len(roblox) == 1 and roblox[0]["uid"] == "30180da44f89809c"  # smallest uid kept
+        assert "only on desk" in [i["text"] for i in h.ideas()]
+    assert _shared_keys(a.heads()) == _shared_keys(b.heads())
+
+
+def test_ideas_someone_added_twice_are_not_merged(pair):
+    a, b = pair
+    manage_idea(data_dir=a.data_dir, action="add", text="same text")
+    a.record()
+    manage_idea(data_dir=b.data_dir, action="add", text="same text")
+    b.record()
+    a.push()
+    b.push()
+    a.pull()
+    b.pull()
+    assert [i["text"] for i in a.ideas()].count("same text") == 2

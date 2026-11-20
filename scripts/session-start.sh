@@ -59,6 +59,18 @@ fi
 ACTIVE_NAMES=$(jq -r '[.workstreams | to_entries[] | select(.value.status == "active") | .key] | join(",")' "$REGISTRY" 2>/dev/null || true)
 ACTIVE_COUNT=$(echo "$ACTIVE_NAMES" | tr ',' '\n' | grep -c . || true)
 
+# Resumed session (or /clear, compaction): it already had a workstream. The
+# session marker survives /exit, so re-attach that one even when several are
+# active (session-end removed the statusline mapping).
+if [ -n "$SESSION_ID" ] && [ -f "$DATA_DIR/session-markers/${SESSION_ID}.json" ]; then
+  PREV_WS=$(jq -r '.workstream // empty' "$DATA_DIR/session-markers/${SESSION_ID}.json" 2>/dev/null || true)
+  if [[ "$PREV_WS" =~ ^[a-z0-9][a-z0-9-]*$ ]] && \
+     jq -e --arg ws "$PREV_WS" '.workstreams[$ws] != null' "$REGISTRY" &>/dev/null; then
+    ACTIVE_NAMES="$PREV_WS"
+    ACTIVE_COUNT=1
+  fi
+fi
+
 if [ "$ACTIVE_COUNT" -eq 0 ]; then
   # No active workstreams — list parked ones
   AVAILABLE=$(jq -r '[.workstreams | to_entries[] | select(.value.status == "parked") | .key] | join(", ")' "$REGISTRY" 2>/dev/null || true)

@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -88,6 +89,32 @@ MAX_TAG_LENGTH = 200
 
 def _get_db_path(ctx: Context[ServerSession, AppContext]) -> Path:
     return ctx.request_context.lifespan_context.db_path
+
+
+_FTS_OPERATORS = {"AND", "OR", "NOT"}
+_FTS_PLAIN = re.compile(r"^\w+\*?$")
+
+
+def fts_query(query: str) -> str:
+    """Make everyday search text safe for FTS5. Words with punctuation
+    (``relay-mailbox``, ``foo:bar``, ``tail3e79dd.ts.net``, ``c++``) become
+    quoted phrases instead of FTS5 syntax errors ("no such column").
+    AND/OR/NOT, parentheses and a trailing ``*`` (prefix search) keep working;
+    a query that already uses quotes is passed through as written."""
+    if '"' in query:
+        return query
+    out = []
+    for token in query.split():
+        lead = len(token) - len(token.lstrip("("))
+        trail = len(token) - len(token.rstrip(")"))
+        core = token[lead:len(token) - trail] if trail else token[lead:]
+        if not core or core in _FTS_OPERATORS or _FTS_PLAIN.match(core):
+            out.append(token)
+            continue
+        star = core.endswith("*") and len(core) > 1
+        word = core[:-1] if star else core
+        out.append("(" * lead + f'"{word}"' + ("*" if star else "") + ")" * trail)
+    return " ".join(out)
 
 
 def _annotate_hosts(rows: list[dict]) -> list[dict]:
@@ -213,7 +240,7 @@ def search_history(
 
     try:
         where_clauses = ["messages_fts MATCH ?"]
-        params: list = [query]
+        params: list = [fts_query(query)]
 
         if project:
             where_clauses.append("s.project_dir LIKE ?")

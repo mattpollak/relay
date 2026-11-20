@@ -576,6 +576,12 @@ def record_changes(
     return new_ids
 
 
+def content_idea_uid(idea: dict) -> str:
+    text = str(idea.get("text", ""))
+    added = str(idea.get("added", ""))
+    return hashlib.sha256(f"idea\0{text}\0{added}".encode()).hexdigest()[:16]
+
+
 def ensure_idea_uids(data_dir: Path) -> int:
     """Give every idea in ideas.json a stable ``uid`` (additive field).
 
@@ -590,8 +596,15 @@ def ensure_idea_uids(data_dir: Path) -> int:
     missing = [i for i in ideas if isinstance(i, dict) and not i.get("uid")]
     if not missing:
         return 0
+    used = {i.get("uid") for i in ideas if isinstance(i, dict)}
     for idea in missing:
-        idea["uid"] = new_idea_uid()
+        # Derived from the content, so the same pre-existing idea imported on
+        # two machines gets the same uid and merges instead of duplicating.
+        uid = content_idea_uid(idea)
+        if uid in used:
+            uid = new_idea_uid()
+        idea["uid"] = uid
+        used.add(uid)
     atomic_write(path, json.dumps(ideas, indent=2) + "\n")
     return len(missing)
 
